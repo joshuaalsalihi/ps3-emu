@@ -1,0 +1,14 @@
+# Build output
+build/
+cmake-build-*/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+
+# User-supplied files (never commit)
+firmware/
+*.PUP
+*.pkg
+*.iso
