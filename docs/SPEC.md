@@ -243,6 +243,7 @@ everything above.
 
 ```
 src/
+  common/      integer types, byte-order helpers
   core/        System, Scheduler, Memory, save states
   cpu/ppu/     instruction defs, decoder, interpreter, disassembler
   cpu/spu/     same, plus spu_float and the MFC
@@ -260,8 +261,9 @@ tools/         code generators, trace diff
 docs/          this spec and notes
 ```
 
-C++20 · clang · CMake + Ninja · Catch2 · clang-format. Few dependencies: fmt and metal-cpp now,
-LLVM only if a JIT is added. Debug builds use ASan/UBSan.
+C++20 · clang · CMake + Ninja · Catch2 · clang-format. Few dependencies: `std::format` instead of
+a formatting library, metal-cpp for graphics, LLVM only if a JIT is added. Debug builds use
+ASan/UBSan.
 
 ---
 
@@ -269,7 +271,7 @@ LLVM only if a JIT is added. Debug builds use ASan/UBSan.
 
 | # | Milestone | Done when |
 |---|---|---|
-| M0 | Skeleton | Builds; CLI loads an ELF and lists its segments; CI runs. |
+| M0 ✅ | Skeleton | Builds; CLI loads an ELF and lists its segments; CI runs. |
 | M1 | PPU integer core | Integer/branch/load-store tests pass; PSL1GHT "hello world" prints. |
 | M2 | Kernel basics | Threads, locks, timers and the scheduler work, deterministically. |
 | M3 | PPU float + vector | FPU and VMX tests pass, including flags. |

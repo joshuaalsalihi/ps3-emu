@@ -65,10 +65,18 @@ This project is clean-room and 0BSD-licensed.
 
 ## Build and test
 
-The build is set up in milestone M0. Until then, there is nothing to build.
+Requires CMake 3.24+, Ninja and a C++20 compiler (clang 17+ or GCC 13+). Catch2 is downloaded
+automatically if it isn't installed.
 
 ```sh
-cmake -S . -B build -G Ninja
+cmake -S . -B build -G Ninja      # Debug build with ASan/UBSan by default
 cmake --build build
 ctest --test-dir build --output-on-failure
+./build/src/ps3emu info <file.elf>
 ```
+
+- Warnings are errors. Fix them; don't suppress them.
+- Run `clang-format -i` on changed files before committing. CI checks formatting.
+- Tests mirror the source tree: `src/loader/elf.cpp` → `tests/loader/elf_test.cpp`.
+- Test inputs are built in code (see `make_elf` in `tests/loader/elf_test.cpp`) rather than
+  committed as binaries, so each test shows exactly what it feeds the parser.
