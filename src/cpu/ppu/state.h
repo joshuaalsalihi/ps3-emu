@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/types.h"
-#include "cpu/ppu/vector.h"
+#include "common/vector.h"
 
 #include <array>
 

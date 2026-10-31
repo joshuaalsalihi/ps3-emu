@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.5 · 2026-10-31 · M3 complete
+**Status:** Draft v0.6 · 2026-10-31 · M3 complete; M4 in progress (SPU instruction set done)
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -120,16 +120,39 @@ stores (`lvlx`, `lvrx`, `stvlx`, `stvrx` and their `l` forms). Vector floating p
 - *IEEE mode*: single precision rounded to nearest; VSCR[NJ] makes denormals zero.
 - *Graphics rounding mode*, the Cell's hardware default (Handbook, A.3.3): rounding toward zero,
   denormals are zero, and no infinities or NaNs (exponent 255 is an ordinary number; overflow
-  saturates to 0x7fffffff). It's the same arithmetic the SPU uses, so M4 can share it.
+  saturates to 0x7fffffff). The SPU uses the same number format (§5.4), but has its own code: it
+  also reports exception flags, and its zero results are always +0.
 
 Estimate instructions (`fres`, `frsqrte`, `vrefp`, `vrsqrtefp`, `vlogefp`, `vexptefp`) come from
 hardware tables we don't have. We return values well within the documented accuracy, computed
 with soft_float so every host agrees.
 
 ### 5.4 SPU
-- **SPU floats:** a dedicated `spu_float` type implements the non-IEEE single-precision rules.
-- **Channels:** mailboxes, signals, events, the decrementer and MFC commands. A channel access that
-  would stall becomes a scheduler wait.
+- **State:** 128 registers of 128 bits, a 256 KB local store holding code and data, and the
+  FPSCR. Every local store address wraps around (it is masked with LSLR, 0x3ffff), including
+  instruction fetch and branch targets.
+- **Instructions:** all of the SPU ISA v1.2 except five optional instructions added in that
+  version (`dfceq`, `dfcmeq`, `dfcgt`, `dfcmgt`, `dftsv`), which postdate the PS3's Cell and are
+  illegal here (UNVERIFIED). Tables, decoder, assembler and disassembler work as on the PPU; the
+  syntax is spu-as's (`a $3, $4, $5`), and the reference encodings come from spu-as.
+- **Single precision (`spu_float`):** the SPU's "extended range" format is not IEEE. Exponent 255
+  is an ordinary number, denormals are zero, results are truncated, overflow saturates to
+  ±0x7fffffff, underflow gives +0, and every zero result is +0. The OVF, UNF, DIFF and DBZ flags
+  are set per word slot. Built on soft_float, like the PPU's floating point.
+- **Double precision:** IEEE 754 through soft_float, with a rounding mode per doubleword slot and
+  sticky FPSCR flags. UNVERIFIED: denormal operands are treated as zero (setting DENORM), and any
+  NaN operand gives the default NaN (setting NAN). The manual allows either behavior.
+- **Estimates:** `frest` and `frsqest` return a base and a step that `fi` interpolates between.
+  The hardware's table is not public, so ours is computed: a line per interval, within 2^-10 of
+  the true value (UNVERIFIED).
+- **Stops:** `stop` and `stopd` end execution with pc after the instruction; halts (`heq`, ...)
+  and illegal instructions stop with pc on it. Branch hints, `sync` and `dsync` change nothing
+  in an interpreter that runs one instruction at a time. Interrupts aren't modeled yet; the
+  branch bits that enable or disable them are only recorded.
+- **Channels:** mailboxes, signals, events, the decrementer and MFC commands. The interpreter
+  stops on `rdch`, `rchcnt` and `wrch` with pc on the instruction, so the channel code performs
+  them outside the instruction handlers. A channel access that would stall becomes a scheduler
+  wait.
 - **MFC:** DMA takes time per the timing model, so code that polls for completion behaves
   realistically. An "instant DMA" debug option helps isolate bugs.
 
@@ -248,8 +271,8 @@ There is **no PS3 hardware available yet**, so ground truth comes from:
 1. **Architecture manuals** (Cell, SPU ISA, PowerPC). Instruction tests are written from their
    pseudocode.
 2. **Independent implementations.** Our assembler and disassembler are checked against encodings
-   from LLVM's PowerPC assembler for every opcode (the PS3 toolchain's assembler for the Cell-only
-   ones). soft_float is checked against the host's IEEE arithmetic on millions of random
+   from LLVM's PowerPC assembler for every opcode (the PS3 toolchain's assemblers for the
+   Cell-only ones and the SPU). soft_float is checked against the host's IEEE arithmetic on millions of random
    operations, in every rounding mode.
 3. **Native execution.** The example programs are C; their expected output comes from compiling
    the same C for the host and running it there.
@@ -302,7 +325,7 @@ everything above.
 
 ```
 src/
-  common/      integer types, byte-order helpers, SHA-1, soft_float (IEEE 754 arithmetic)
+  common/      integer types, byte-order helpers, 128-bit vectors, SHA-1, soft_float (IEEE 754)
   core/        System, Scheduler, Memory, save states
   cpu/ppu/     instruction defs, decoder, interpreter, disassembler
   cpu/spu/     same, plus spu_float and the MFC
@@ -357,6 +380,9 @@ ASan/UBSan.
 7. The Cell's exact estimate tables, and the undefined bits we fill in (e.g. the high word of
    `fctiw`'s result, FR after a disabled overflow). Real hardware will settle these.
 8. A formal definition of `lvlx`/`lvrx`/`stvlx`/`stvrx`; ours follows the handbook's description.
+9. SPU details the ISA leaves to the implementation: the `frest`/`frsqest` tables, whether the
+   Cell's SPU flushes double-precision denormals and propagates NaNs, whether it has the
+   optional v1.2 instructions, which SPRs exist, and the signal type `stopd` reports.
 
 ---
 
@@ -365,7 +391,8 @@ ASan/UBSan.
 - *Power ISA* v3.1C (OpenPOWER Foundation): the floating-point and vector chapters, with
   pseudocode for every instruction. The classic instructions are unchanged since v2.02.
 - *Cell Broadband Engine Programming Handbook* v1.11 (2008): PPE specifics, graphics rounding mode
-- *Cell Broadband Engine Architecture* v1.02; *SPU ISA*; *SPU Language Extensions*
+- *Cell Broadband Engine Architecture* v1.02; *Synergistic Processor Unit Instruction Set
+  Architecture* v1.2 (2007); *SPU Language Extensions*
 - psdevwiki.com (PS3): syscalls, file formats, RSX
 - PSL1GHT: SDK headers and samples, for building test programs
 - envytools: public NVIDIA hardware documentation for NV40/G70 commands
