@@ -11,7 +11,10 @@ namespace ppu {
 // clang-format off
 enum class Operand {
     rD, rS, rA, rB,          // general-purpose registers
-    frD, frS,                // floating-point registers
+    frD, frS, frA, frB, frC, // floating-point registers
+    FLM, U,                  // mtfsf field mask, mtfsfi immediate
+    vD, vS, vA, vB, vC,      // vector registers
+    SHB, UIM, SIM, STRM,     // vsldoi shift, 5-bit immediates, data stream number
     SIMM, UIMM,              // 16-bit immediates
     d_rA, ds_rA,             // memory operand "offset(rA)"
     crfD, crfS, L,           // compare: CR field and operand size

@@ -1,17 +1,22 @@
 # Emulator library: everything except the frontend, so tests can link against it.
 add_library(ps3emu_core STATIC
     common/sha1.cpp
+    common/soft_float.cpp
     core/memory.cpp
     core/range_allocator.cpp
     core/system.cpp
     cpu/ppu/assembler.cpp
     cpu/ppu/branch.cpp
     cpu/ppu/disassembler.cpp
+    cpu/ppu/floating_point.cpp
     cpu/ppu/integer.cpp
     cpu/ppu/interpreter.cpp
     cpu/ppu/load_store.cpp
     cpu/ppu/opcodes.cpp
     cpu/ppu/operands.cpp
+    cpu/ppu/vector_float.cpp
+    cpu/ppu/vector_integer.cpp
+    cpu/ppu/vector_permute.cpp
     hle/linker.cpp
     hle/nid.cpp
     hle/sys_prx_for_user.cpp

@@ -37,7 +37,21 @@ std::string format_operand(Operand operand, Instruction op, u64 pc) {
     case Operand::rA: return reg(op.ra());
     case Operand::rB: return reg(op.rb());
     case Operand::frD:
-    case Operand::frS: return std::format("f{}", op.rd());
+    case Operand::frS: return std::format("f{}", op.frd());
+    case Operand::frA: return std::format("f{}", op.fra());
+    case Operand::frB: return std::format("f{}", op.frb());
+    case Operand::frC: return std::format("f{}", op.frc());
+    case Operand::FLM: return std::format("{:#x}", op.flm());
+    case Operand::U: return std::to_string(op.u());
+    case Operand::vD:
+    case Operand::vS: return std::format("v{}", op.vd());
+    case Operand::vA: return std::format("v{}", op.va());
+    case Operand::vB: return std::format("v{}", op.vb());
+    case Operand::vC: return std::format("v{}", op.vc());
+    case Operand::SHB: return std::to_string(op.shb());
+    case Operand::UIM: return std::to_string(op.vuimm());
+    case Operand::SIM: return std::to_string(op.vsimm());
+    case Operand::STRM: return std::to_string(op.bits(9, 10));
     case Operand::SIMM: return std::to_string(op.simm());
     case Operand::UIMM: return std::format("{:#x}", op.uimm());
     case Operand::d_rA: return std::format("{}({})", op.d(), reg(op.ra()));
@@ -70,6 +84,7 @@ std::string mnemonic_with_suffixes(const OpcodeInfo& info, Instruction op) {
     std::string text(info.mnemonic);
     if ((info.flags & k_oe) && op.oe()) text += 'o';
     if ((info.flags & k_rc) && op.rc()) text += '.';
+    if ((info.flags & k_rc_vector) && op.vrc()) text += '.';
     if ((info.flags & k_lk) && op.lk()) text += 'l';
     if ((info.flags & k_aa) && op.aa()) text += 'a';
     return text;

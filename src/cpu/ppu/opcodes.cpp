@@ -28,6 +28,10 @@ constexpr std::optional<ExtendedField> extended_field(Form form) {
     case Form::XFX: return ExtendedField{21, 30};
     case Form::XO: return ExtendedField{22, 30};
     case Form::XS: return ExtendedField{21, 29};
+    case Form::A: return ExtendedField{26, 30};
+    case Form::VA: return ExtendedField{26, 31};
+    case Form::VX: return ExtendedField{21, 31};
+    case Form::VC: return ExtendedField{22, 31};
     default: return std::nullopt;
     }
 }
@@ -53,7 +57,9 @@ u32 OpcodeInfo::match() const {
 }
 
 Decoder::Decoder() {
-    for (const auto table : {integer_opcodes(), branch_opcodes(), load_store_opcodes()}) {
+    for (const auto table :
+         {integer_opcodes(), branch_opcodes(), load_store_opcodes(), floating_point_opcodes(),
+          vector_integer_opcodes(), vector_float_opcodes(), vector_permute_opcodes()}) {
         for (const OpcodeInfo& info : table) {
             by_primary_[info.primary].push_back(&info);
             all_.push_back(&info);

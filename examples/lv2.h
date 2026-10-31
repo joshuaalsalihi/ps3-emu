@@ -44,3 +44,14 @@ static inline void print_number(s64 value) {
 
     print(&buffer[i]);
 }
+
+// Prints all 16 hex digits of a 64-bit value.
+static inline void print_hex(u64 value) {
+    char buffer[17];
+    for (int i = 15; i >= 0; i--) {
+        buffer[i] = "0123456789abcdef"[value & 15];
+        value >>= 4;
+    }
+    buffer[16] = 0;
+    print(buffer);
+}

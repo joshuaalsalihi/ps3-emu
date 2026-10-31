@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types.h"
+#include "cpu/ppu/vector.h"
 
 #include <array>
 
@@ -36,11 +37,18 @@ constexpr u32 k_spr_vrsave = 256;
 constexpr u32 k_spr_tb = 268;
 constexpr u32 k_spr_tbu = 269;
 
-// User-visible PPU registers. Vector registers arrive in milestone M3.
+// Vector status and control register bits.
+constexpr u32 k_vscr_non_java = 1u << 16; // NJ: denormals are treated as zero
+constexpr u32 k_vscr_saturated = 1;       // SAT: a saturating instruction clamped (sticky)
+
+// User-visible PPU registers.
 struct State {
     std::array<u64, 32> gpr{};
-    // Floating-point registers, as raw IEEE double bit patterns. Arithmetic arrives in M3.
-    std::array<u64, 32> fpr{};
+    std::array<u64, 32> fpr{}; // IEEE double bit patterns
+    std::array<Vector, 32> vr{};
+    u32 fpscr = 0;
+    // UNVERIFIED: the VSCR value LV2 starts threads with. Non-Java mode is the usual default.
+    u32 vscr = k_vscr_non_java;
     u32 cr = 0;
     u64 lr = 0;
     u64 ctr = 0;

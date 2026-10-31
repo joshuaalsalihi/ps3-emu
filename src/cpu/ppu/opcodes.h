@@ -28,6 +28,10 @@ enum class Form {
     XFX, // like X, for special registers
     XO,  // arithmetic; extended opcode in bits 22-30, with OE in bit 21
     XS,  // sradi; extended opcode in bits 21-29
+    A,   // floating-point arithmetic; extended opcode in bits 26-30
+    VA,  // vector with three sources; extended opcode in bits 26-31
+    VX,  // vector; extended opcode in bits 21-31
+    VC,  // vector compare; extended opcode in bits 22-31, with Rc in bit 21
 };
 
 // Opcode flags. The first four are optional bits that add a suffix to the mnemonic.
@@ -36,6 +40,7 @@ constexpr u8 k_oe = 2;         // bit 21: overflow form, updates XER[OV] ("addo"
 constexpr u8 k_lk = 4;         // bit 31: link, saves the return address in LR ("bl")
 constexpr u8 k_aa = 8;         // bit 30: absolute branch target ("ba")
 constexpr u8 k_rc_always = 16; // bit 31 must be 1 ("stwcx.")
+constexpr u8 k_rc_vector = 32; // bit 21: vector compare record form, updates CR6 ("vcmpequb.")
 
 // One row of the opcode table: how to recognize, execute and print an instruction.
 struct OpcodeInfo {
@@ -57,6 +62,10 @@ struct OpcodeInfo {
 std::span<const OpcodeInfo> integer_opcodes();
 std::span<const OpcodeInfo> branch_opcodes();
 std::span<const OpcodeInfo> load_store_opcodes();
+std::span<const OpcodeInfo> floating_point_opcodes();
+std::span<const OpcodeInfo> vector_integer_opcodes();
+std::span<const OpcodeInfo> vector_float_opcodes();
+std::span<const OpcodeInfo> vector_permute_opcodes();
 
 // Finds the opcode table entry for an instruction word.
 class Decoder {

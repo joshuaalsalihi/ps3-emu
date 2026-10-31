@@ -127,6 +127,20 @@ void insert_operand(u32& raw, Operand operand, std::string_view text, u64 pc) {
     case Operand::rB: return insert(raw, 16, 20, parse_register(text, "r", 32));
     case Operand::frD:
     case Operand::frS: return insert(raw, 6, 10, parse_register(text, "f", 32));
+    case Operand::frA: return insert(raw, 11, 15, parse_register(text, "f", 32));
+    case Operand::frB: return insert(raw, 16, 20, parse_register(text, "f", 32));
+    case Operand::frC: return insert(raw, 21, 25, parse_register(text, "f", 32));
+    case Operand::FLM: return insert(raw, 7, 14, parse_number(text));
+    case Operand::U: return insert(raw, 16, 19, parse_number(text));
+    case Operand::vD:
+    case Operand::vS: return insert(raw, 6, 10, parse_register(text, "v", 32));
+    case Operand::vA: return insert(raw, 11, 15, parse_register(text, "v", 32));
+    case Operand::vB: return insert(raw, 16, 20, parse_register(text, "v", 32));
+    case Operand::vC: return insert(raw, 21, 25, parse_register(text, "v", 32));
+    case Operand::SHB: return insert(raw, 22, 25, parse_number(text));
+    case Operand::UIM: return insert(raw, 11, 15, parse_number(text));
+    case Operand::SIM: return insert(raw, 11, 15, parse_number(text), true);
+    case Operand::STRM: return insert(raw, 9, 10, parse_number(text));
     case Operand::SIMM: return insert(raw, 16, 31, parse_number(text), true);
     case Operand::UIMM: return insert(raw, 16, 31, parse_number(text));
     case Operand::d_rA: return insert_memory_operand(raw, text, false);
@@ -175,6 +189,7 @@ std::optional<u32> match_mnemonic(const OpcodeInfo& info, std::string_view text)
     };
     take(k_oe, 'o', 21);
     take(k_rc, '.', 31);
+    take(k_rc_vector, '.', 21);
     take(k_lk, 'l', 31);
     take(k_aa, 'a', 30);
 

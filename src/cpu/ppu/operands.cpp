@@ -19,6 +19,11 @@ constexpr std::pair<std::string_view, Operand> k_operand_names[] = {
     {"sh", Operand::sh},       {"mb", Operand::mb},        {"me", Operand::me},
     {"TO", Operand::TO},       {"SPR", Operand::SPR},      {"CRM", Operand::CRM},
     {"index", Operand::index}, {"frD", Operand::frD},      {"frS", Operand::frS},
+    {"frA", Operand::frA},     {"frB", Operand::frB},      {"frC", Operand::frC},
+    {"FLM", Operand::FLM},     {"U", Operand::U},          {"vD", Operand::vD},
+    {"vS", Operand::vS},       {"vA", Operand::vA},        {"vB", Operand::vB},
+    {"vC", Operand::vC},       {"SHB", Operand::SHB},      {"UIM", Operand::UIM},
+    {"SIM", Operand::SIM},     {"STRM", Operand::STRM},
 };
 
 Operand operand_from_name(std::string_view name) {

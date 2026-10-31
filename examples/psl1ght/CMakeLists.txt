@@ -19,7 +19,7 @@ function(add_psl1ght_program name)
     # sprxlinker fills in the import counts, as PSL1GHT's own build does.
     set(build_command
         "ppu-gcc -mcpu=cell -O2 -Wall -I\$PS3DEV/ppu/include /source/${name}.c"
-        " -L\$PS3DEV/ppu/lib -lrt -llv2 -o /build/${name}.elf && sprxlinker /build/${name}.elf")
+        " -L\$PS3DEV/ppu/lib -lrt -llv2 -lm -o /build/${name}.elf && sprxlinker /build/${name}.elf")
     string(CONCAT build_command ${build_command})
 
     add_custom_command(
@@ -44,3 +44,4 @@ endfunction()
 
 add_psl1ght_program(hello)
 add_psl1ght_program(threads)
+add_psl1ght_program(floats)

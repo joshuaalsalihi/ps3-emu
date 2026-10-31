@@ -37,6 +37,11 @@ struct Thread {
     // Set by a handler to make the interpreter stop after the current instruction.
     std::optional<Stop> stop;
 
+    // The Cell's VMX "graphics rounding mode" (HID1[grap_mode]), a hardware setting rather than
+    // a user register. The Cell BE Programming Handbook (v1.11, section 2.5.6 and A.3.3) says it
+    // is enabled by default. UNVERIFIED: whether the PS3's system software leaves it enabled.
+    bool vmx_graphics_mode = true;
+
     u64& gpr(u32 n) { return state.gpr[n]; }
     // (rA|0) from the manuals: register rA, or the value 0 when rA is r0.
     u64 gpr_or_zero(u32 n) const { return n == 0 ? 0 : state.gpr[n]; }

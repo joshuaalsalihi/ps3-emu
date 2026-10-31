@@ -43,6 +43,9 @@ cleverer or faster one.
 - Never read the host clock, random numbers or other host state from emulation code. Time comes from
   the scheduler's virtual clock; external input goes through the replay log.
 - Never let iteration order of unordered containers affect guest-visible state.
+- Never compute guest floating-point results with host floating point; use `common/soft_float`.
+  Hosts differ in details, and compilers may fuse or reorder host float code. (Comparing two
+  non-NaN doubles, or flipping a sign bit, is exact and fine.)
 - All emulator state is owned by `System`, with no globals, so it can be saved and restored.
 
 ## Clean-room policy

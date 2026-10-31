@@ -5,7 +5,8 @@ CompileFlags:
 If:
   PathMatch: examples/.*
 CompileFlags:
-  Add: [--target=powerpc64-unknown-none, -mabi=elfv2, -ffreestanding]
+  Add: [--target=powerpc64-unknown-none, -mabi=elfv2, -mcpu=970, -ffreestanding]
+  Remove: [-fsanitize=*, -fno-sanitize-recover=*, -arch]
 ---
 # PSL1GHT's headers only exist inside the toolchain's Docker image.
 If:

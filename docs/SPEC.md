@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.4 · 2026-10-31 · M2 complete
+**Status:** Draft v0.5 · 2026-10-31 · M3 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -99,12 +99,32 @@ the mnemonic and follow the manual's pseudocode.
 The assembler exists so tests can be written as readable assembly text.
 
 ### 5.3 PPU
-- Full register state: GPR, FPR, VR, CR, LR, CTR, XER, FPSCR, VSCR. (Done: everything but the
-  vector registers and FPSCR. Floating-point loads and stores are done; arithmetic is M3.)
+- Full register state: GPR, FPR, VR, CR, LR, CTR, XER, FPSCR, VSCR.
 - The `sc` instruction calls into the LV2 kernel (syscall number in r11).
 - Each of the two hardware threads is modeled as an independent context.
 - Not implemented yet: the load/store string instructions (`lswi`, `lswx`, `stswi`, `stswx`),
-  which compilers rarely emit.
+  which compilers rarely emit. Instructions the Cell lacks (`popcntb`, `fre`, `frsqrtes`, `mcrxr`)
+  are illegal, as on hardware (Cell BE Programming Handbook, A.2.4).
+
+**Floating point.** All arithmetic goes through `common/soft_float`, our own IEEE 754
+implementation, never the host FPU: hosts differ in details (such as when they detect a "tiny"
+result), and compilers may fuse or reorder host floating-point code. soft_float computes each
+result exactly and rounds it once, following PowerPC's rules (tininess before rounding; with
+overflow or underflow exceptions enabled, a wrapped exponent). The PPU layer adds NaN priority
+(FRA, FRB, FRC), the invalid-operation cases, and every FPSCR bit (FR, FI, FPRF, sticky exceptions,
+FX, and the VX and FEX summaries). Enabled exceptions behave as specified (e.g. the target is left
+unchanged), but don't yet raise a program interrupt: LV2 runs games with them masked.
+
+**Vector (VMX).** All AltiVec instructions, plus the Cell's own unaligned left/right loads and
+stores (`lvlx`, `lvrx`, `stvlx`, `stvrx` and their `l` forms). Vector floating point has two modes:
+- *IEEE mode*: single precision rounded to nearest; VSCR[NJ] makes denormals zero.
+- *Graphics rounding mode*, the Cell's hardware default (Handbook, A.3.3): rounding toward zero,
+  denormals are zero, and no infinities or NaNs (exponent 255 is an ordinary number; overflow
+  saturates to 0x7fffffff). It's the same arithmetic the SPU uses, so M4 can share it.
+
+Estimate instructions (`fres`, `frsqrte`, `vrefp`, `vrsqrtefp`, `vlogefp`, `vexptefp`) come from
+hardware tables we don't have. We return values well within the documented accuracy, computed
+with soft_float so every host agrees.
 
 ### 5.4 SPU
 - **SPU floats:** a dedicated `spu_float` type implements the non-IEEE single-precision rules.
@@ -227,12 +247,15 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
 There is **no PS3 hardware available yet**, so ground truth comes from:
 1. **Architecture manuals** (Cell, SPU ISA, PowerPC). Instruction tests are written from their
    pseudocode.
-2. **LLVM, as an independent implementation.** Our assembler and disassembler are checked against
-   instruction encodings produced by LLVM's PowerPC assembler, covering every opcode.
+2. **Independent implementations.** Our assembler and disassembler are checked against encodings
+   from LLVM's PowerPC assembler for every opcode (the PS3 toolchain's assembler for the Cell-only
+   ones). soft_float is checked against the host's IEEE arithmetic on millions of random
+   operations, in every rounding mode.
 3. **Native execution.** The example programs are C; their expected output comes from compiling
    the same C for the host and running it there.
 4. **Real homebrew.** PSL1GHT programs, built with the actual PS3 toolchain, run unmodified. Their
-   expected output is chosen so it doesn't depend on thread timing.
+   expected output is chosen so it doesn't depend on thread timing, or comes from the same C run
+   natively (e.g. `printf` of doubles to hundreds of digits).
 5. **IBM's Cell simulator** (systemsim), if a copy can be obtained.
 6. **Black-box comparison with other emulators**: run the same test program and compare its output.
    We never read their source (see §11).
@@ -279,7 +302,7 @@ everything above.
 
 ```
 src/
-  common/      integer types, byte-order helpers
+  common/      integer types, byte-order helpers, SHA-1, soft_float (IEEE 754 arithmetic)
   core/        System, Scheduler, Memory, save states
   cpu/ppu/     instruction defs, decoder, interpreter, disassembler
   cpu/spu/     same, plus spu_float and the MFC
@@ -293,9 +316,8 @@ src/
   debug/       tracing, GDB server, snapshots
   frontend/    CLI
 examples/      guest programs (assembly, C, PSL1GHT) that run as integration tests
-tools/         helper scripts, e.g. building the PSL1GHT toolchain image
 tests/         unit tests, mirroring src/; shared fixtures in tests/support/
-tools/         code generators, trace diff
+tools/         helper scripts (e.g. building the PSL1GHT toolchain image); later, trace diff
 docs/          this spec and notes
 ```
 
@@ -312,7 +334,7 @@ ASan/UBSan.
 | M0 ✅ | Skeleton | Builds; CLI loads an ELF and lists its segments; CI runs. |
 | M1 ✅ | PPU integer core | Integer/branch/load-store/atomic tests pass; compiled C programs run and print. |
 | M2 ✅ | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
-| M3 | PPU float + vector | FPU and VMX tests pass, including flags. |
+| M3 ✅ | PPU float + vector | FPU and VMX tests pass, including flags. |
 | M4 | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
 | M5 | First pixels | FIFO + state model; Metal draws a PSL1GHT triangle matching its golden hash. |
 | M6 | Debugging | GDB server, trace diff, save states, replay. |
@@ -330,14 +352,20 @@ ASan/UBSan.
 3. The initial register state LV2 gives a new process (beyond r1, r2, r13 and pc) is unverified.
 4. Real LV2 thread scheduling: how priorities preempt, and the length of a time slice.
 5. What the 0x30-byte header before each thread's TLS block contains.
+6. Does the PS3's system software leave the VMX graphics rounding mode enabled (HID1[grap_mode])?
+   We follow the hardware default (enabled). And what VSCR value do threads start with?
+7. The Cell's exact estimate tables, and the undefined bits we fill in (e.g. the high word of
+   `fctiw`'s result, FR after a disabled overflow). Real hardware will settle these.
+8. A formal definition of `lvlx`/`lvrx`/`stvlx`/`stvrx`; ours follows the handbook's description.
 
 ---
 
 ## 16. References
 
-- *Cell Broadband Engine Programming Handbook*; *Cell BE Architecture*; *SPU ISA*;
-  *SPU Language Extensions*
-- *PowerPC Architecture Books I–III*; *AltiVec / VMX Programming Environments Manual*
+- *Power ISA* v3.1C (OpenPOWER Foundation): the floating-point and vector chapters, with
+  pseudocode for every instruction. The classic instructions are unchanged since v2.02.
+- *Cell Broadband Engine Programming Handbook* v1.11 (2008): PPE specifics, graphics rounding mode
+- *Cell Broadband Engine Architecture* v1.02; *SPU ISA*; *SPU Language Extensions*
 - psdevwiki.com (PS3): syscalls, file formats, RSX
 - PSL1GHT: SDK headers and samples, for building test programs
 - envytools: public NVIDIA hardware documentation for NV40/G70 commands

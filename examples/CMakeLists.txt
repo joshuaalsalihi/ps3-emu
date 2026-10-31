@@ -23,7 +23,10 @@ if(NOT PS3EMU_GUEST_CLANG OR clang_cannot_target_ppc OR NOT PS3EMU_GUEST_LINKER)
 endif()
 message(STATUS "Examples: using ${PS3EMU_GUEST_CLANG} and ${PS3EMU_GUEST_LINKER}")
 
-set(guest_flags ${guest_target} -mabi=elfv2 -mcpu=ppc64 -O2
+# -mcpu=970 (the PowerPC G5) is the closest LLVM target to the Cell's PPU: it has fsqrt and VMX.
+# -ffp-contract=off stops the compiler fusing a * b + c, so results match the native runs that
+# produce the .expected files.
+set(guest_flags ${guest_target} -mabi=elfv2 -mcpu=970 -O2 -ffp-contract=off -fno-math-errno
     -ffreestanding -fno-builtin -nostdlib -fno-stack-protector)
 set(linker_script ${CMAKE_CURRENT_SOURCE_DIR}/ps3.ld)
 
@@ -61,3 +64,5 @@ add_guest_program(hello hello.S)
 add_guest_program(fibonacci crt0.S fibonacci.c)
 add_guest_program(primes crt0.S primes.c)
 add_guest_program(selftest crt0.S selftest.c)
+add_guest_program(float_selftest crt0.S float_selftest.c)
+add_guest_program(vector_selftest crt0.S vector_selftest.c)

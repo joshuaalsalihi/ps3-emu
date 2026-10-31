@@ -68,6 +68,26 @@ public:
     constexpr u32 spr() const { return (bits(16, 20) << 5) | bits(11, 15); }
     constexpr u32 to() const { return bits(6, 10); }
 
+    // Floating point
+    constexpr u32 frd() const { return bits(6, 10); }
+    constexpr u32 frs() const { return bits(6, 10); }
+    constexpr u32 fra() const { return bits(11, 15); }
+    constexpr u32 frb() const { return bits(16, 20); }
+    constexpr u32 frc() const { return bits(21, 25); }
+    constexpr u32 flm() const { return bits(7, 14); } // mtfsf field mask
+    constexpr u32 u() const { return bits(16, 19); }  // mtfsfi immediate
+
+    // Vector (VMX)
+    constexpr u32 vd() const { return bits(6, 10); }
+    constexpr u32 vs() const { return bits(6, 10); }
+    constexpr u32 va() const { return bits(11, 15); }
+    constexpr u32 vb() const { return bits(16, 20); }
+    constexpr u32 vc() const { return bits(21, 25); }
+    constexpr u32 shb() const { return bits(22, 25); } // vsldoi byte shift
+    constexpr u32 vuimm() const { return bits(11, 15); }
+    constexpr s32 vsimm() const { return static_cast<s32>(sign_extend(bits(11, 15), 5)); }
+    constexpr bool vrc() const { return bit(21); } // vector compare record form: updates CR6
+
     // The emulator-defined `hle` instruction's function index.
     constexpr u32 hle_index() const { return bits(6, 31); }
 

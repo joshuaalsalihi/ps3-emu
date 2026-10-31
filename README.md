@@ -5,11 +5,14 @@ Seeing if giving Anthropic $20/month is enough to fulfill a childhood dream.
 An accuracy-focused PlayStation 3 emulator, built for research, homebrew development and learning
 how the Cell processor works.
 
-**Status:** milestone M2 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
-multiple threads, locks, condition variables, semaphores, sleeps, `printf` and `malloc`.
+**Status:** milestone M3 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
+multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included) and
+`malloc`.
 
-- **CPU:** the PS3's main core (the PPU) runs all integer, branch, load/store and atomic
-  instructions. Floating-point arithmetic and vectors come next.
+- **CPU:** the PS3's main core (the PPU) runs its full user instruction set: integer, branch,
+  load/store, atomics, floating point (with every FPSCR flag) and the VMX vector unit, including
+  the Cell's own vector modes and instructions. Floating point is computed in software, so results
+  are exact and identical on every host.
 - **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
   with deterministic thread scheduling on a virtual clock.
 
