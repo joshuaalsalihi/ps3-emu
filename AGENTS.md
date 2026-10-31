@@ -88,6 +88,21 @@ This project is clean-room and 0BSD-licensed.
 - Don't trust hand-computed constants for large values; check them independently (e.g. with
   Python, or by running the same C natively, as the `examples/*.expected` files do).
 
+## Commits
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org):
+`type(scope): summary`.
+
+- **Types:** `feat` (new emulator behavior), `fix` (bug fixes, including broken CI or tooling),
+  `test`, `docs`, `refactor` (no behavior change), `build` / `ci`, `chore`.
+- **Scope** (optional): the area changed, e.g. `ppu`, `lv2`, `hle`, `loader`, `core`, `cli`,
+  `examples`, `ci`, `docs`.
+- **Summary:** imperative mood, lowercase, no trailing period, about 72 characters at most.
+  Example: `fix(lv2): reject stack sizes that overflow`.
+- **Body** (optional): after a blank line, short bullets on what changed and why.
+- **Milestones:** `feat: M3 …`, so the history still reads as a roadmap.
+- **Branches** mirror the types: `type/short-description`, e.g. `fix/checkout-node24`.
+
 ## Build and test
 
 Requires CMake 3.24+, Ninja and a C++20 compiler (clang 17+ or GCC 13+). Catch2 is downloaded
