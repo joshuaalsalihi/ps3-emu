@@ -11,6 +11,7 @@ namespace ppu {
 // clang-format off
 enum class Operand {
     rD, rS, rA, rB,          // general-purpose registers
+    frD, frS,                // floating-point registers
     SIMM, UIMM,              // 16-bit immediates
     d_rA, ds_rA,             // memory operand "offset(rA)"
     crfD, crfS, L,           // compare: CR field and operand size
@@ -18,6 +19,7 @@ enum class Operand {
     BO, BI, BD, LI,          // branch fields; BD and LI are written as target addresses
     SH, MB, ME, sh, mb, me,  // rotate fields
     TO, SPR, CRM,            // trap condition, special register, CR field mask
+    index,                   // the emulator-defined `hle` instruction's function index
 };
 // clang-format on
 

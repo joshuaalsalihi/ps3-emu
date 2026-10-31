@@ -20,8 +20,9 @@ static inline s64 lv2_syscall(s64 number, s64 a, s64 b, s64 c, s64 d) {
 
 static inline u64 string_length(const char* text) {
     u64 length = 0;
-    while (text[length] != 0)
+    while (text[length] != 0) {
         length++;
+    }
     return length;
 }
 

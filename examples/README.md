@@ -10,6 +10,18 @@ integration test: its output must match its `.expected` file exactly.
 | `primes.c` | A sieve over a zero-initialized (.bss) array. |
 | `selftest.c` | 34 checks of compiler-generated code: 128-bit multiplies, shifts, atomics, jump tables, indirect calls. |
 
+The `psl1ght/` directory holds real PS3 homebrew, written against the
+[PSL1GHT](https://github.com/ps3dev/PSL1GHT) SDK and compiled with the PS3 toolchain (GCC):
+
+| Program | Shows |
+|---|---|
+| `psl1ght/hello.c` | `printf` through newlib, PSL1GHT's runtime, imported system library calls and LV2. |
+| `psl1ght/threads.c` | Threads, lightweight mutexes and condition variables, semaphores, join and sleep. |
+
+Only the main thread prints, after its workers finish, so the expected output holds no matter how
+the threads interleave. The toolchain runs in Docker: build its image once with
+`tools/build-psl1ght-image.sh`, then re-run CMake.
+
 Build them with the rest of the project, then run one:
 
 ```sh
@@ -26,5 +38,6 @@ Build them with the rest of the project, then run one:
 
 ## Expected output
 
-The `.expected` files come from compiling the same C for the host and running it natively, not
-from the emulator. That makes them an independent check.
+The `.expected` files never come from the emulator. For the LLVM examples, they come from
+compiling the same C for the host and running it natively. For the PSL1GHT examples, the values
+are simple arithmetic (for example 1 + 2 + … + 100 = 5050).

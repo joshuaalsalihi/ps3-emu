@@ -7,6 +7,7 @@
 #include <concepts>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 // Thrown when the guest touches memory it may not access.
@@ -39,6 +40,8 @@ public:
     void map(u64 address, u64 size, u8 permissions);
     // Changes the permissions of an already mapped, page-aligned range.
     void protect(u64 address, u64 size, u8 permissions);
+    // Makes a page-aligned range inaccessible again.
+    void unmap(u64 address, u64 size);
     bool is_accessible(u64 address, u64 size, u8 permissions) const;
 
     template <std::unsigned_integral T>
@@ -55,6 +58,8 @@ public:
     }
 
     void read_bytes(u64 address, std::span<u8> out) const;
+    // Reads a NUL-terminated string, stopping after `max_length` characters.
+    std::string read_string(u64 address, u64 max_length) const;
     void write_bytes(u64 address, std::span<const u8> bytes);
 
     // Atomic reservations, used by load-and-reserve / store-conditional pairs such as lwarx and

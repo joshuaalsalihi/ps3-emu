@@ -30,7 +30,8 @@ void execute_one(Thread& t, std::ostream* trace) {
         t.stop = Stop{StopReason::fault, fault.what()};
     }
 
-    const bool resumes_after = !t.stop || t.stop->reason == StopReason::syscall;
+    const bool resumes_after =
+        !t.stop || t.stop->reason == StopReason::syscall || t.stop->reason == StopReason::hle_call;
     if (resumes_after) t.state.pc = t.next_pc;
 }
 

@@ -20,6 +20,11 @@ void Memory::protect(u64 address, u64 size, u8 permissions) {
     set_permissions(address, size, permissions);
 }
 
+void Memory::unmap(u64 address, u64 size) {
+    set_permissions(address, size, 0);
+    lose_reservations(address, size);
+}
+
 void Memory::set_permissions(u64 address, u64 size, u8 permissions) {
     if (address % k_page_size != 0 || size % k_page_size != 0 || address > k_size ||
         size > k_size - address) {
@@ -53,6 +58,16 @@ void Memory::read_bytes(u64 address, std::span<u8> out) const {
     if (out.empty()) return;
     check_access(address, out.size(), k_read);
     std::memcpy(out.data(), host_.data() + address, out.size());
+}
+
+std::string Memory::read_string(u64 address, u64 max_length) const {
+    std::string text;
+    for (u64 i = 0; i < max_length; ++i) {
+        const char c = static_cast<char>(read<u8>(address + i));
+        if (c == '\0') break;
+        text += c;
+    }
+    return text;
 }
 
 void Memory::write_bytes(u64 address, std::span<const u8> bytes) {

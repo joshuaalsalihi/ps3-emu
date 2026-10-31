@@ -5,9 +5,15 @@ Seeing if giving Anthropic $20/month is enough to fulfill a childhood dream.
 An accuracy-focused PlayStation 3 emulator, built for research, homebrew development and learning
 how the Cell processor works.
 
-**Status:** milestone M1 is done. The emulator runs PowerPC programs on the PS3's main CPU core
-(the PPU): all integer, branch, load/store and atomic instructions, plus enough of the PS3 kernel
-to print text and exit. See the [spec](docs/SPEC.md) for the architecture and roadmap.
+**Status:** milestone M2 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
+multiple threads, locks, condition variables, semaphores, sleeps, `printf` and `malloc`.
+
+- **CPU:** the PS3's main core (the PPU) runs all integer, branch, load/store and atomic
+  instructions. Floating-point arithmetic and vectors come next.
+- **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
+  with deterministic thread scheduling on a virtual clock.
+
+See the [spec](docs/SPEC.md) for the architecture and roadmap.
 
 ## Goals
 
@@ -28,9 +34,12 @@ cmake --build build
 ctest --test-dir build
 ```
 
-The [example programs](examples/) also need a PowerPC cross-compiler, which LLVM provides:
-`brew install llvm lld` on macOS, or `apt install clang lld` on Linux. Without it, the examples
-are skipped.
+The [example programs](examples/) need extra tools, and are skipped if they're missing:
+
+- **LLVM** for the small assembly and C examples: `brew install llvm lld` on macOS, or
+  `apt install clang lld` on Linux.
+- **Docker** for the PSL1GHT examples: `tools/build-psl1ght-image.sh` builds the PS3 homebrew
+  toolchain from source into an image (this takes a while), then re-run CMake.
 
 ## Usage
 
@@ -41,17 +50,29 @@ Hello from the PPU!
 $ ./build/src/ps3emu run build/examples/selftest.elf
 34 of 34 checks passed
 
+$ ./build/src/ps3emu run build/examples/psl1ght/threads.elf
+4 threads added 1..1000: total 2002000
+consumer received 1..100: sum 5050
+ping-pong: 10 turns
+slept at least 5 ms: yes
+
 $ ./build/src/ps3emu run --trace build/examples/hello.elf
+--- thread 0x1000 "main"
 0x00010000  38600000  li r3, 0
 0x00010004  3c800002  lis r4, 2
 0x00010008  38840008  addi r4, r4, 8
+0x0001000c  38a00014  li r5, 20
+0x00010010  38c00000  li r6, 0
+0x00010014  39600193  li r11, 403
+0x00010018  44000002  sc
+    syscall 403 sys_tty_write
 ...
 ```
 
 | Command | What it does |
 |---|---|
 | `ps3emu run <file.elf>` | Runs a program; exits with the program's exit status. |
-| `--trace` | Prints every instruction as it executes (to stderr). |
+| `--trace` | Prints every instruction, syscall, library call and thread switch (to stderr). |
 | `--max-instructions N` | Stops after N instructions. |
 | `ps3emu info <file.elf>` | Prints the ELF header and segment table. |
 

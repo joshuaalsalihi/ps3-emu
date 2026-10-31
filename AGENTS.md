@@ -65,6 +65,19 @@ This project is clean-room and 0BSD-licensed.
 4. Add behavior tests using the `PpuTest` fixture, which runs assembly text:
    `run({"addi r3, r1, -8"}); CHECK(r(3) == ...);`
 
+## Adding a syscall or library function
+
+- **Syscall:** add a handler and a table row to the matching `src/lv2/sys_*.cpp` file. The number,
+  name and signature come from psdevwiki ("LV2 Functions and Syscalls"). Keep the logic in a
+  `Kernel` method, and keep argument reading and result writing in the handler.
+- **HLE library function:** add it to the module's table (e.g. `src/hle/sys_prx_for_user.cpp`)
+  under its official name. Its NID is computed from the name; check it against a known NID in
+  `tests/hle/nid_test.cpp`.
+- Struct layouts may come from SDK headers (PSL1GHT is MIT-licensed). Remember that firmware
+  structs use 32-bit pointers even though PSL1GHT programs use 64-bit ones.
+- A handler either sets a result or makes the thread wait; see `Kernel::wait`. Never block the host.
+- Test through `KernelTest` (`tests/support/kernel_test.h`), which makes syscalls from fake threads.
+
 ## Testing
 
 - Every instruction gets unit tests covering normal cases and edge cases (flags, overflow, NaN,
@@ -94,4 +107,6 @@ ctest --test-dir build --output-on-failure
 - Test inputs are built in code (`tests/support/elf_builder.h`, the PPU assembler) rather than
   committed as binaries, so each test shows exactly what it runs.
 - The programs in `examples/` need LLVM (`brew install llvm lld` or `apt install clang lld`).
-  CMake skips them, with a message, if it can't find a PowerPC-capable toolchain.
+  The PSL1GHT ones need the Docker image from `tools/build-psl1ght-image.sh`, and a build
+  directory Docker can write to (on macOS, somewhere under /Users). CMake skips whatever it
+  can't build, with a message.

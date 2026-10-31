@@ -63,10 +63,21 @@ struct SegmentSpec {
     u64 mem_size = 0; // 0 means the size of `contents`
 };
 
-// Builds a loadable program from LOAD segments.
-inline std::vector<u8> make_program(const std::vector<SegmentSpec>& specs, u64 entry) {
+// A segment that only describes part of a LOAD segment's contents, such as PRX_PARAM.
+struct InfoSegmentSpec {
+    u32 type;
+    u64 vaddr;
+    u64 size;
+};
+
+// Builds a loadable program from LOAD segments, plus optional segments that point into them.
+inline std::vector<u8> make_program(const std::vector<SegmentSpec>& specs, u64 entry,
+                                    const std::vector<InfoSegmentSpec>& info = {}) {
     std::vector<loader::ElfSegment> segments;
-    u64 offset = k_elf_header_size + specs.size() * k_program_header_size;
+    const std::size_t segment_count = specs.size() + info.size();
+    const u64 contents_start = k_elf_header_size + segment_count * k_program_header_size;
+
+    u64 offset = contents_start;
     for (const SegmentSpec& spec : specs) {
         segments.push_back({
             .type = loader::k_segment_load,
@@ -80,8 +91,22 @@ inline std::vector<u8> make_program(const std::vector<SegmentSpec>& specs, u64 e
         offset += spec.contents.size();
     }
 
-    std::vector<u8> bytes = make_elf(
-        segments, offset - k_elf_header_size - specs.size() * k_program_header_size, entry);
+    // Info segments share the file bytes of the LOAD segment that contains them.
+    for (const InfoSegmentSpec& spec : info) {
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            const loader::ElfSegment load = segments[i];
+            if (spec.vaddr < load.vaddr || spec.vaddr + spec.size > load.vaddr + load.file_size) {
+                continue;
+            }
+            segments.push_back({.type = spec.type,
+                                .file_offset = load.file_offset + (spec.vaddr - load.vaddr),
+                                .vaddr = spec.vaddr,
+                                .file_size = spec.size,
+                                .mem_size = spec.size});
+        }
+    }
+
+    std::vector<u8> bytes = make_elf(segments, offset - contents_start, entry);
     for (std::size_t i = 0; i < specs.size(); ++i) {
         std::copy(specs[i].contents.begin(), specs[i].contents.end(),
                   bytes.begin() + static_cast<std::ptrdiff_t>(segments[i].file_offset));

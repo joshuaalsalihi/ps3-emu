@@ -36,6 +36,8 @@ std::string format_operand(Operand operand, Instruction op, u64 pc) {
     case Operand::rS: return reg(op.rs());
     case Operand::rA: return reg(op.ra());
     case Operand::rB: return reg(op.rb());
+    case Operand::frD:
+    case Operand::frS: return std::format("f{}", op.rd());
     case Operand::SIMM: return std::to_string(op.simm());
     case Operand::UIMM: return std::format("{:#x}", op.uimm());
     case Operand::d_rA: return std::format("{}({})", op.d(), reg(op.ra()));
@@ -59,6 +61,7 @@ std::string format_operand(Operand operand, Instruction op, u64 pc) {
     case Operand::TO: return std::to_string(op.to());
     case Operand::SPR: return spr_name(op.spr());
     case Operand::CRM: return std::format("{:#x}", op.crm());
+    case Operand::index: return std::to_string(op.hle_index());
     }
     return "?";
 }

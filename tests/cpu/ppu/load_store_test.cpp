@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <iterator>
+
 using namespace ppu;
 using test::PpuTest;
 
@@ -211,4 +213,57 @@ TEST_CASE_METHOD(PpuTest, "addresses above 4 GB fault") {
     r(4) = 0x1'0000'0000 + k_data;
     run({"lbz r3, 0(r4)"});
     CHECK(stopped_with(StopReason::fault));
+}
+
+// ---- Floating point ----
+// Expected bit patterns cross-checked with Python's IEEE float conversions, except where noted.
+
+TEST_CASE_METHOD(PpuTest, "lfd and stfd copy 64-bit patterns unchanged") {
+    memory.write<u64>(k_data, 0x7ff8'dead'beef'0001); // a NaN with a payload
+    r(4) = k_data;
+    r(5) = 8;
+    run({"lfd f1, 0(r4)", "stfd f1, 16(r4)", "lfdx f2, r4, r5", "stfdux f1, r4, r5"});
+    CHECK(state().fpr[1] == 0x7ff8'dead'beef'0001);
+    CHECK(memory.read<u64>(k_data + 16) == 0x7ff8'dead'beef'0001);
+    CHECK(memory.read<u64>(k_data + 8) == 0x7ff8'dead'beef'0001);
+    CHECK(r(4) == k_data + 8);
+}
+
+TEST_CASE_METHOD(PpuTest, "lfs widens single precision to double") {
+    const u32 singles[] = {0x3fc0'0000, 0x8000'0000, 0x7f80'0000,
+                           0x0000'0001, 0x0040'0000, 0xff7f'ffff};
+    const u64 doubles[] = {0x3ff8'0000'0000'0000, 0x8000'0000'0000'0000, 0x7ff0'0000'0000'0000,
+                           0x36a0'0000'0000'0000, 0x3800'0000'0000'0000, 0xc7ef'ffff'e000'0000};
+    for (std::size_t i = 0; i < std::size(singles); ++i) {
+        memory.write<u32>(k_data, singles[i]);
+        r(4) = k_data;
+        run({"lfs f1, 0(r4)"});
+        INFO(i);
+        CHECK(state().fpr[1] == doubles[i]);
+    }
+}
+
+TEST_CASE_METHOD(PpuTest, "stfs narrows double precision, denormalizing small values") {
+    r(4) = k_data;
+    state().fpr[1] = 0x3ff8'0000'0000'0000; // 1.5
+    state().fpr[2] = 0x37d0'0000'0000'0000; // 2^-130: a single-precision denormal
+    state().fpr[3] = 0xb6a0'0000'0000'0000; // -2^-149: the smallest one
+    // 1.5 * 2^-149 falls between denormals. The manual truncates (giving 1), where an ordinary
+    // conversion would round to 2. Expected value worked out from the manual's pseudocode.
+    state().fpr[4] = 0x36a8'0000'0000'0000;
+    run({"stfs f1, 0(r4)", "stfs f2, 4(r4)", "stfs f3, 8(r4)", "stfs f4, 12(r4)"});
+    CHECK(memory.read<u32>(k_data) == 0x3fc0'0000);
+    CHECK(memory.read<u32>(k_data + 4) == 0x0008'0000);
+    CHECK(memory.read<u32>(k_data + 8) == 0x8000'0001);
+    CHECK(memory.read<u32>(k_data + 12) == 0x0000'0001);
+}
+
+TEST_CASE_METHOD(PpuTest, "single-precision update and indexed forms") {
+    memory.write<u32>(k_data + 8, 0x3fc0'0000);
+    r(4) = k_data;
+    r(5) = 8;
+    run({"lfsux f1, r4, r5", "stfsu f1, 4(r4)", "lfsx f2, r4, r0", "stfsx f2, r4, r5"});
+    CHECK(r(4) == k_data + 12);
+    CHECK(state().fpr[2] == 0x3ff8'0000'0000'0000);
+    CHECK(memory.read<u32>(k_data + 20) == 0x3fc0'0000);
 }

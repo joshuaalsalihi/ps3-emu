@@ -15,10 +15,12 @@ namespace {
 // ---- Text parsing ----
 
 std::string_view trim(std::string_view text) {
-    while (!text.empty() && text.front() == ' ')
+    while (!text.empty() && text.front() == ' ') {
         text.remove_prefix(1);
-    while (!text.empty() && text.back() == ' ')
+    }
+    while (!text.empty() && text.back() == ' ') {
         text.remove_suffix(1);
+    }
     return text;
 }
 
@@ -123,6 +125,8 @@ void insert_operand(u32& raw, Operand operand, std::string_view text, u64 pc) {
     case Operand::rS: return insert(raw, 6, 10, parse_register(text, "r", 32));
     case Operand::rA: return insert(raw, 11, 15, parse_register(text, "r", 32));
     case Operand::rB: return insert(raw, 16, 20, parse_register(text, "r", 32));
+    case Operand::frD:
+    case Operand::frS: return insert(raw, 6, 10, parse_register(text, "f", 32));
     case Operand::SIMM: return insert(raw, 16, 31, parse_number(text), true);
     case Operand::UIMM: return insert(raw, 16, 31, parse_number(text));
     case Operand::d_rA: return insert_memory_operand(raw, text, false);
@@ -150,6 +154,7 @@ void insert_operand(u32& raw, Operand operand, std::string_view text, u64 pc) {
         return insert(raw, 16, 20, spr >> 5);
     }
     case Operand::CRM: return insert(raw, 12, 19, parse_number(text));
+    case Operand::index: return insert(raw, 6, 31, parse_number(text));
     }
 }
 

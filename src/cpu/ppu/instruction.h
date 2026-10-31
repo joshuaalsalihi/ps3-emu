@@ -68,6 +68,9 @@ public:
     constexpr u32 spr() const { return (bits(16, 20) << 5) | bits(11, 15); }
     constexpr u32 to() const { return bits(6, 10); }
 
+    // The emulator-defined `hle` instruction's function index.
+    constexpr u32 hle_index() const { return bits(6, 31); }
+
 private:
     u32 raw_;
 };

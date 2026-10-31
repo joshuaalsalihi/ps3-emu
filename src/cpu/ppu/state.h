@@ -36,9 +36,11 @@ constexpr u32 k_spr_vrsave = 256;
 constexpr u32 k_spr_tb = 268;
 constexpr u32 k_spr_tbu = 269;
 
-// User-visible PPU registers. Floating-point and vector registers arrive in milestone M3.
+// User-visible PPU registers. Vector registers arrive in milestone M3.
 struct State {
     std::array<u64, 32> gpr{};
+    // Floating-point registers, as raw IEEE double bit patterns. Arithmetic arrives in M3.
+    std::array<u64, 32> fpr{};
     u32 cr = 0;
     u64 lr = 0;
     u64 ctr = 0;

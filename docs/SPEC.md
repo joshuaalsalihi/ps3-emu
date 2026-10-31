@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.3 · 2026-10-31 · M1 complete
+**Status:** Draft v0.4 · 2026-10-31 · M2 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -57,14 +57,11 @@ backward compatibility (PS1/PS2), or emulating the hypervisor.
 ```
  Frontend (CLI)  ── args, config, GDB server
         │
- System ── owns all emulator state
-   ├─ Scheduler ── runs every guest context in turn on a virtual clock
-   │    ├─ PPU threads
-   │    ├─ SPU threads
-   │    └─ RSX command processor
+ System ── owns all emulator state; its run loop gives each runnable context a turn
    ├─ Memory ── guest address space, byte swapping, reservations
-   ├─ LV2 kernel (HLE) ── syscalls and kernel objects
-   ├─ Module manager ── loads libraries, resolves NIDs, binds HLE functions
+   ├─ LV2 kernel (HLE) ── syscalls, kernel objects, and PPU thread scheduling
+   │    └─ PPU threads (SPU threads and the RSX join the run loop later)
+   ├─ HLE linker ── binds imported library functions to their HLE versions by NID
    ├─ VFS ── maps guest paths (/dev_hdd0, …) to host folders
    └─ Devices ── audio, controller input, timers
         │
@@ -102,7 +99,8 @@ the mnemonic and follow the manual's pseudocode.
 The assembler exists so tests can be written as readable assembly text.
 
 ### 5.3 PPU
-- Full register state: GPR, FPR, VR, CR, LR, CTR, XER, FPSCR, VSCR.
+- Full register state: GPR, FPR, VR, CR, LR, CTR, XER, FPSCR, VSCR. (Done: everything but the
+  vector registers and FPSCR. Floating-point loads and stores are done; arithmetic is M3.)
 - The `sc` instruction calls into the LV2 kernel (syscall number in r11).
 - Each of the two hardware threads is modeled as an independent context.
 - Not implemented yet: the load/store string instructions (`lswi`, `lswx`, `stswi`, `stswx`),
@@ -131,11 +129,21 @@ interpreter. On macOS it needs `MAP_JIT` memory and the `allow-jit` entitlement.
 ## 6. Scheduling and timing
 
 **Deterministic mode (default):**
-- One host thread runs all guest contexts (PPU, SPU, RSX) round-robin, in fixed slices of guest
-  cycles.
-- Each context counts its cycles; a shared **virtual clock** derives from them. The timebase, SPU
-  decrementer, kernel timers, vblank and audio all use it.
-- Blocking calls (sleep, lock wait, mailbox stall) yield and register a wake-up condition.
+- One host thread runs all guest contexts round-robin. Today that means PPU threads; SPU threads
+  and the RSX will join the same loop.
+- A **virtual clock** counts guest cycles. The timebase, sleeps, timeouts and
+  `sys_time_get_current_time` all come from it, never from the host clock.
+
+**PPU threads (implemented in M2):**
+- The LV2 kernel picks threads round-robin in creation order. Each turn lasts 1,000 instructions or
+  until the thread makes a syscall or HLE call.
+- A blocking call (lock, condition variable, semaphore, join, sleep) marks the thread as waiting.
+  Waiters wake first come, first served, or by thread priority if the object was created with the
+  priority protocol.
+- Timeouts are virtual-clock deadlines. When every thread is waiting, the clock jumps to the next
+  deadline. If none exists, the run ends as a **deadlock**, listing what each thread waits on.
+- Simplification (UNVERIFIED): priorities only decide wake-up order. They don't preempt, so a
+  busy-waiting thread can't starve the others.
 
 **Timing levels:**
 
@@ -158,10 +166,17 @@ A multi-threaded mode for speed may come later. It will not support replay or tr
 | Core libraries (graphics, filesystem, input, audio, threads, `cellSpurs`) | **HLE** |
 | Pure-compute libraries (codecs, compression) | **LLE** if the user supplies firmware; otherwise HLE or "unimplemented". |
 
-- **HLE functions** are registered in a table: module, NID, name, handler and signature. Argument
-  passing is generated from the signature.
-- **Missing functions** bind to a stub that logs the call. Each module can be configured to either
-  continue or halt.
+- **HLE functions** are registered in a table of official names and handlers. A function's NID
+  is the first 4 bytes (little-endian) of SHA-1(name + fixed suffix), so the table needs no hand-copied
+  IDs. Tests check the computed NIDs against PSL1GHT's import tables.
+- **Linking imports:** the loader reads the PRX_PARAM segment's stub tables. Each imported function
+  gets a thunk, `hle n; blr`, and a PS3 function descriptor pointing at it. `hle` is an
+  emulator-defined instruction (primary opcode 1, which PowerPC leaves unused). It stops the
+  interpreter so `System` can run HLE function `n`.
+- **Missing functions** report success (r3 = 0) and log a warning the first time. Making this
+  configurable per module (continue or halt) is still to do.
+- **Thread-local storage:** each thread gets its own copy of the program's TLS segment, with r13
+  pointing 0x7000 bytes past its start (the 64-bit PowerPC ELF convention).
 - **Kernel objects** (threads, mutexes, semaphores, event queues, SPU thread groups, …) live in one
   serializable ID table.
 - **Executable formats**, in order: ELF → fake-signed SELF (PSL1GHT output) → retail SELF/SPRX using
@@ -178,8 +193,17 @@ A multi-threaded mode for speed may come later. It will not support replay or tr
   watchpoints. HLE code uses bounds-checked `GuestPtr<T>` instead of raw pointers.
 - Pages are tracked at 4 KB in software, independent of the host page size (16 KB on Apple
   Silicon).
-- Exact region base addresses are to be confirmed from public documentation before
-  implementation.
+- Guest layout used today. UNVERIFIED: modeled on psdevwiki's description, but the exact boundaries
+  may differ from real LV2.
+
+| Range | Use |
+|---|---|
+| `0x0001'0000`… | The program's segments, at the addresses in its ELF |
+| `0x2f00'0000` | HLE import thunks and descriptors (emulator-owned) |
+| `0x2fff'0000` | Kernel stubs that threads return to |
+| `0x3000'0000` | User memory (`sys_memory_allocate`), 256 MB |
+| `0x4000'0000` | Memory mapper address ranges (`sys_mmapper`), e.g. PSL1GHT's heap |
+| `0xd000'0000` | Thread stacks and TLS, each stack with a guard page below it |
 
 ---
 
@@ -207,8 +231,10 @@ There is **no PS3 hardware available yet**, so ground truth comes from:
    instruction encodings produced by LLVM's PowerPC assembler, covering every opcode.
 3. **Native execution.** The example programs are C; their expected output comes from compiling
    the same C for the host and running it there.
-4. **IBM's Cell simulator** (systemsim), if a copy can be obtained.
-5. **Black-box comparison with other emulators**: run the same test program and compare its output.
+4. **Real homebrew.** PSL1GHT programs, built with the actual PS3 toolchain, run unmodified. Their
+   expected output is chosen so it doesn't depend on thread timing.
+5. **IBM's Cell simulator** (systemsim), if a copy can be obtained.
+6. **Black-box comparison with other emulators**: run the same test program and compare its output.
    We never read their source (see §11).
 
 **Hardware harness (prepared now, used later):** a PSL1GHT program that runs instruction test cases
@@ -258,7 +284,7 @@ src/
   cpu/ppu/     instruction defs, decoder, interpreter, disassembler
   cpu/spu/     same, plus spu_float and the MFC
   lv2/         syscalls and kernel objects
-  hle/         module manager; one file per HLE library
+  hle/         import linker, NIDs; one file per HLE library
   loader/      ELF, SELF, PRX, SFO
   crypto/      optional; off by default
   rsx/         FIFO, state, shader IR, surfaces, texture decoding
@@ -266,7 +292,8 @@ src/
   vfs/  audio/  input/  platform/
   debug/       tracing, GDB server, snapshots
   frontend/    CLI
-examples/      guest programs (assembly and C) that run as integration tests
+examples/      guest programs (assembly, C, PSL1GHT) that run as integration tests
+tools/         helper scripts, e.g. building the PSL1GHT toolchain image
 tests/         unit tests, mirroring src/; shared fixtures in tests/support/
 tools/         code generators, trace diff
 docs/          this spec and notes
@@ -284,7 +311,7 @@ ASan/UBSan.
 |---|---|---|
 | M0 ✅ | Skeleton | Builds; CLI loads an ELF and lists its segments; CI runs. |
 | M1 ✅ | PPU integer core | Integer/branch/load-store/atomic tests pass; compiled C programs run and print. |
-| M2 | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
+| M2 ✅ | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
 | M3 | PPU float + vector | FPU and VMX tests pass, including flags. |
 | M4 | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
 | M5 | First pixels | FIFO + state model; Metal draws a PSL1GHT triangle matching its golden hash. |
@@ -297,9 +324,12 @@ ASan/UBSan.
 
 ## 15. Open questions
 
-1. Default time-slice size: settle by experiment once there are multiple threads (M2).
+1. The time slice is 1,000 instructions for now. Revisit when SPUs join the run loop, since code
+   that polls for DMA completion may need finer interleaving.
 2. Can a copy of IBM systemsim be obtained legally?
-3. The initial register state LV2 gives a new process (beyond r1, r2 and pc) is unverified.
+3. The initial register state LV2 gives a new process (beyond r1, r2, r13 and pc) is unverified.
+4. Real LV2 thread scheduling: how priorities preempt, and the length of a time slice.
+5. What the 0x30-byte header before each thread's TLS block contains.
 
 ---
 

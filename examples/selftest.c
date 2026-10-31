@@ -121,8 +121,9 @@ static void check_control_flow(void) {
     check("indirect call again", function(21), 42);
 
     u64 total = 0;
-    for (u64 i = 0; i < 7; i++)
+    for (u64 i = 0; i < 7; i++) {
         total += pick(opaque(i));
+    }
     check("jump table", total, 231);
 }
 

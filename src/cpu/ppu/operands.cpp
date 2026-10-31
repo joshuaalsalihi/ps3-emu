@@ -9,15 +9,16 @@ namespace ppu {
 namespace {
 
 constexpr std::pair<std::string_view, Operand> k_operand_names[] = {
-    {"rD", Operand::rD},      {"rS", Operand::rS},        {"rA", Operand::rA},
-    {"rB", Operand::rB},      {"SIMM", Operand::SIMM},    {"UIMM", Operand::UIMM},
-    {"d(rA)", Operand::d_rA}, {"ds(rA)", Operand::ds_rA}, {"crfD", Operand::crfD},
-    {"crfS", Operand::crfS},  {"L", Operand::L},          {"crbD", Operand::crbD},
-    {"crbA", Operand::crbA},  {"crbB", Operand::crbB},    {"BO", Operand::BO},
-    {"BI", Operand::BI},      {"BD", Operand::BD},        {"LI", Operand::LI},
-    {"SH", Operand::SH},      {"MB", Operand::MB},        {"ME", Operand::ME},
-    {"sh", Operand::sh},      {"mb", Operand::mb},        {"me", Operand::me},
-    {"TO", Operand::TO},      {"SPR", Operand::SPR},      {"CRM", Operand::CRM},
+    {"rD", Operand::rD},       {"rS", Operand::rS},        {"rA", Operand::rA},
+    {"rB", Operand::rB},       {"SIMM", Operand::SIMM},    {"UIMM", Operand::UIMM},
+    {"d(rA)", Operand::d_rA},  {"ds(rA)", Operand::ds_rA}, {"crfD", Operand::crfD},
+    {"crfS", Operand::crfS},   {"L", Operand::L},          {"crbD", Operand::crbD},
+    {"crbA", Operand::crbA},   {"crbB", Operand::crbB},    {"BO", Operand::BO},
+    {"BI", Operand::BI},       {"BD", Operand::BD},        {"LI", Operand::LI},
+    {"SH", Operand::SH},       {"MB", Operand::MB},        {"ME", Operand::ME},
+    {"sh", Operand::sh},       {"mb", Operand::mb},        {"me", Operand::me},
+    {"TO", Operand::TO},       {"SPR", Operand::SPR},      {"CRM", Operand::CRM},
+    {"index", Operand::index}, {"frD", Operand::frD},      {"frS", Operand::frS},
 };
 
 Operand operand_from_name(std::string_view name) {
@@ -28,10 +29,12 @@ Operand operand_from_name(std::string_view name) {
 }
 
 std::string_view trim(std::string_view text) {
-    while (!text.empty() && text.front() == ' ')
+    while (!text.empty() && text.front() == ' ') {
         text.remove_prefix(1);
-    while (!text.empty() && text.back() == ' ')
+    }
+    while (!text.empty() && text.back() == ' ') {
         text.remove_suffix(1);
+    }
     return text;
 }
 

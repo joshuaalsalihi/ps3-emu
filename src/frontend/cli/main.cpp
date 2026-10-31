@@ -74,6 +74,10 @@ int run_program(std::string_view path, const RunOptions& options) {
         std::cerr << "error: guest fault after " << result.instructions
                   << " instructions: " << result.message << "\n";
         return 1;
+    case RunResult::Outcome::deadlocked:
+        std::cerr << "error: deadlock after " << result.instructions
+                  << " instructions: " << result.message << "\n";
+        return 1;
     case RunResult::Outcome::instruction_limit:
         std::cerr << "stopped: reached the limit of " << result.instructions << " instructions\n";
         return 1;

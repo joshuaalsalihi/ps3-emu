@@ -5,6 +5,7 @@
 // Naming: "u" forms (update) write the effective address back to rA after the access;
 // "x" forms (indexed) add rB instead of an immediate offset; "a" forms sign-extend.
 
+#include "cpu/ppu/float_bits.h"
 #include "cpu/ppu/opcodes.h"
 
 #include <array>
@@ -266,6 +267,92 @@ void stdux(Thread& t, Instruction op) {
     t.gpr(op.ra()) = ea;
 }
 
+// ---- Floating-point doubleword ----
+// These copy the 64-bit pattern unchanged, so they need no floating-point arithmetic.
+
+void lfd(Thread& t, Instruction op) {
+    t.state.fpr[op.rd()] = t.memory.read<u64>(ea_d(t, op));
+}
+
+void lfdx(Thread& t, Instruction op) {
+    t.state.fpr[op.rd()] = t.memory.read<u64>(ea_x(t, op));
+}
+
+void lfdu(Thread& t, Instruction op) {
+    const u64 ea = ea_d_update(t, op);
+    t.state.fpr[op.rd()] = t.memory.read<u64>(ea);
+    t.gpr(op.ra()) = ea;
+}
+
+void lfdux(Thread& t, Instruction op) {
+    const u64 ea = ea_x_update(t, op);
+    t.state.fpr[op.rd()] = t.memory.read<u64>(ea);
+    t.gpr(op.ra()) = ea;
+}
+
+void stfd(Thread& t, Instruction op) {
+    t.memory.write(ea_d(t, op), t.state.fpr[op.rs()]);
+}
+
+void stfdx(Thread& t, Instruction op) {
+    t.memory.write(ea_x(t, op), t.state.fpr[op.rs()]);
+}
+
+void stfdu(Thread& t, Instruction op) {
+    const u64 ea = ea_d_update(t, op);
+    t.memory.write(ea, t.state.fpr[op.rs()]);
+    t.gpr(op.ra()) = ea;
+}
+
+void stfdux(Thread& t, Instruction op) {
+    const u64 ea = ea_x_update(t, op);
+    t.memory.write(ea, t.state.fpr[op.rs()]);
+    t.gpr(op.ra()) = ea;
+}
+
+// ---- Floating-point single ----
+// Memory holds single precision; registers hold double. See float_bits.h.
+
+void lfs(Thread& t, Instruction op) {
+    t.state.fpr[op.rd()] = single_to_double_bits(t.memory.read<u32>(ea_d(t, op)));
+}
+
+void lfsx(Thread& t, Instruction op) {
+    t.state.fpr[op.rd()] = single_to_double_bits(t.memory.read<u32>(ea_x(t, op)));
+}
+
+void lfsu(Thread& t, Instruction op) {
+    const u64 ea = ea_d_update(t, op);
+    t.state.fpr[op.rd()] = single_to_double_bits(t.memory.read<u32>(ea));
+    t.gpr(op.ra()) = ea;
+}
+
+void lfsux(Thread& t, Instruction op) {
+    const u64 ea = ea_x_update(t, op);
+    t.state.fpr[op.rd()] = single_to_double_bits(t.memory.read<u32>(ea));
+    t.gpr(op.ra()) = ea;
+}
+
+void stfs(Thread& t, Instruction op) {
+    t.memory.write(ea_d(t, op), double_to_single_bits(t.state.fpr[op.rs()]));
+}
+
+void stfsx(Thread& t, Instruction op) {
+    t.memory.write(ea_x(t, op), double_to_single_bits(t.state.fpr[op.rs()]));
+}
+
+void stfsu(Thread& t, Instruction op) {
+    const u64 ea = ea_d_update(t, op);
+    t.memory.write(ea, double_to_single_bits(t.state.fpr[op.rs()]));
+    t.gpr(op.ra()) = ea;
+}
+
+void stfsux(Thread& t, Instruction op) {
+    const u64 ea = ea_x_update(t, op);
+    t.memory.write(ea, double_to_single_bits(t.state.fpr[op.rs()]));
+    t.gpr(op.ra()) = ea;
+}
+
 // ---- Multiple word ----
 
 void lmw(Thread& t, Instruction op) {
@@ -389,6 +476,22 @@ constexpr OpcodeInfo k_opcodes[] = {
     {"stdu",     Form::DS,  62, 1,    stdu,       "rS, ds(rA)"},
     {"stdx",     Form::X,   31, 149,  stdx,       "rS, rA, rB"},
     {"stdux",    Form::X,   31, 181,  stdux,      "rS, rA, rB"},
+    {"lfs",      Form::D,   48, 0,    lfs,        "frD, d(rA)"},
+    {"lfsu",     Form::D,   49, 0,    lfsu,       "frD, d(rA)"},
+    {"lfsx",     Form::X,   31, 535,  lfsx,       "frD, rA, rB"},
+    {"lfsux",    Form::X,   31, 567,  lfsux,      "frD, rA, rB"},
+    {"stfs",     Form::D,   52, 0,    stfs,       "frS, d(rA)"},
+    {"stfsu",    Form::D,   53, 0,    stfsu,      "frS, d(rA)"},
+    {"stfsx",    Form::X,   31, 663,  stfsx,      "frS, rA, rB"},
+    {"stfsux",   Form::X,   31, 695,  stfsux,     "frS, rA, rB"},
+    {"lfd",      Form::D,   50, 0,    lfd,        "frD, d(rA)"},
+    {"lfdu",     Form::D,   51, 0,    lfdu,       "frD, d(rA)"},
+    {"lfdx",     Form::X,   31, 599,  lfdx,       "frD, rA, rB"},
+    {"lfdux",    Form::X,   31, 631,  lfdux,      "frD, rA, rB"},
+    {"stfd",     Form::D,   54, 0,    stfd,       "frS, d(rA)"},
+    {"stfdu",    Form::D,   55, 0,    stfdu,      "frS, d(rA)"},
+    {"stfdx",    Form::X,   31, 727,  stfdx,      "frS, rA, rB"},
+    {"stfdux",   Form::X,   31, 759,  stfdux,     "frS, rA, rB"},
     {"lmw",      Form::D,   46, 0,    lmw,        "rD, d(rA)"},
     {"stmw",     Form::D,   47, 0,    stmw,       "rS, d(rA)"},
     {"lwarx",    Form::X,   31, 20,   lwarx,      "rD, rA, rB"},

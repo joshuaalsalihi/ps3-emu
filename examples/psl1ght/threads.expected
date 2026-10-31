@@ -1,0 +1,4 @@
+4 threads added 1..1000: total 2002000
+consumer received 1..100: sum 5050
+ping-pong: 10 turns
+slept at least 5 ms: yes

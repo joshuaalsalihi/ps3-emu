@@ -12,9 +12,10 @@ namespace ppu {
 
 // Why the interpreter handed control back.
 enum class StopReason {
-    syscall, // `sc`: the kernel must handle a system call
-    trap,    // a trap instruction fired
-    fault,   // illegal instruction or bad memory access
+    syscall,  // `sc`: the kernel must handle a system call
+    hle_call, // `hle`: an emulated library function must run
+    trap,     // a trap instruction fired
+    fault,    // illegal instruction or bad memory access
 };
 
 struct Stop {

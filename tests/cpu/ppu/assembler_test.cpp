@@ -208,6 +208,24 @@ constexpr Encoding k_encodings[] = {
     {"dcbf r3, r4", 0x7c0320ac},
     {"dcbst r3, r4", 0x7c03206c},
     {"icbi r3, r4", 0x7c0327ac},
+    {"lfs f1, 8(r1)", 0xc0210008},
+    {"lfsu f2, -4(r4)", 0xc444fffc},
+    {"lfsx f3, r4, r5", 0x7c642c2e},
+    {"lfsux f4, r4, r5", 0x7c842c6e},
+    {"stfs f8, 12(r1)", 0xd101000c},
+    {"stfsu f9, 4(r4)", 0xd5240004},
+    {"stfsx f10, r4, r5", 0x7d442d2e},
+    {"stfsux f11, r4, r5", 0x7d642d6e},
+    {"lfd f1, 8(r1)", 0xc8210008},
+    {"lfdu f2, -8(r4)", 0xcc44fff8},
+    {"lfdx f3, r4, r5", 0x7c642cae},
+    {"lfdux f4, r4, r5", 0x7c842cee},
+    {"stfd f31, -8(r1)", 0xdbe1fff8},
+    {"stfdu f5, 16(r4)", 0xdca40010},
+    {"stfdx f6, r4, r5", 0x7cc42dae},
+    {"stfdux f7, r4, r5", 0x7ce42dee},
+    // Emulator-defined, so LLVM doesn't know it: primary opcode 1, then the index.
+    {"hle 5", 0x04000005},
 };
 // clang-format on
 

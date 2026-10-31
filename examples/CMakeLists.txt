@@ -4,6 +4,8 @@
 # On macOS: brew install llvm lld   (Apple's clang can't target PowerPC)
 # On Linux: apt install clang lld
 
+add_subdirectory(psl1ght)
+
 file(GLOB homebrew_lld_dirs /opt/homebrew/opt/lld*/bin /usr/local/opt/lld*/bin)
 find_program(PS3EMU_GUEST_CLANG clang HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin)
 find_program(PS3EMU_GUEST_LINKER ld.lld HINTS ${homebrew_lld_dirs})

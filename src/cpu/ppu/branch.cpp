@@ -190,6 +190,13 @@ void sc(Thread& t, Instruction) {
     t.stop = Stop{StopReason::syscall, ""};
 }
 
+// Emulator-defined, not a PowerPC instruction: calls high-level-emulated library function number
+// `index`. Imported library functions point at a thunk made of `hle` and `blr`. Primary opcode 1
+// is unused by the PowerPC architecture, so real code never contains it.
+void hle(Thread& t, Instruction) {
+    t.stop = Stop{StopReason::hle_call, ""};
+}
+
 // Memory barriers. Guest threads run one at a time, so every access is already ordered.
 void barrier(Thread&, Instruction) {}
 
@@ -222,6 +229,7 @@ constexpr OpcodeInfo k_opcodes[] = {
     {"sync",     Form::X,    31, 598, barrier, ""},
     {"eieio",    Form::X,    31, 854, barrier, ""},
     {"isync",    Form::XL,   19, 150, barrier, ""},
+    {"hle",      Form::I,    1,  0,   hle,     "index"},
 };
 // clang-format on
 
