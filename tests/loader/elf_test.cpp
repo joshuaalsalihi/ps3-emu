@@ -1,58 +1,17 @@
 #include "loader/elf.h"
 
+#include "support/elf_builder.h"
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <algorithm>
-#include <cstddef>
-#include <iterator>
 #include <vector>
 
 using namespace loader;
 using Catch::Matchers::ContainsSubstring;
+using test::make_elf;
 
 namespace {
-
-void store_be(std::vector<u8>& bytes, std::size_t offset, u64 value, std::size_t size) {
-    for (std::size_t i = 0; i < size; ++i) {
-        bytes[offset + i] = static_cast<u8>(value >> (8 * (size - 1 - i)));
-    }
-}
-
-// Builds a minimal big-endian ELF64 PPU executable: a header, then the program
-// header table, then `data_size` bytes of segment data.
-std::vector<u8> make_elf(const std::vector<ElfSegment>& segments, u64 data_size = 0x100) {
-    constexpr std::size_t header_size = 64;
-    constexpr std::size_t entry_size = 56;
-    std::vector<u8> bytes(header_size + segments.size() * entry_size + data_size);
-
-    const u8 identity[] = {
-        0x7f, 'E', 'L', 'F',
-        2, // 64-bit
-        2, // big-endian
-        1, // ELF version
-    };
-    std::copy(std::begin(identity), std::end(identity), bytes.begin());
-    store_be(bytes, 16, k_elf_type_exec, 2);
-    store_be(bytes, 18, k_elf_machine_ppc64, 2);
-    store_be(bytes, 24, 0x10200, 8);     // entry
-    store_be(bytes, 32, header_size, 8); // program header table offset
-    store_be(bytes, 54, entry_size, 2);
-    store_be(bytes, 56, segments.size(), 2);
-
-    for (std::size_t i = 0; i < segments.size(); ++i) {
-        const ElfSegment& s = segments[i];
-        const std::size_t at = header_size + i * entry_size;
-        store_be(bytes, at + 0, s.type, 4);
-        store_be(bytes, at + 4, s.flags, 4);
-        store_be(bytes, at + 8, s.file_offset, 8);
-        store_be(bytes, at + 16, s.vaddr, 8);
-        store_be(bytes, at + 32, s.file_size, 8);
-        store_be(bytes, at + 40, s.mem_size, 8);
-        store_be(bytes, at + 48, s.align, 8);
-    }
-    return bytes;
-}
 
 const ElfSegment k_code_segment = {
     .type = k_segment_load,

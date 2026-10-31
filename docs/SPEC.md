@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.2 · 2026-10-29
+**Status:** Draft v0.3 · 2026-10-31 · M1 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -94,14 +94,19 @@ public:
 The scheduler only talks to `Core`, so an interpreter and a future JIT are interchangeable.
 
 ### 5.2 Instruction definitions
-Each instruction (PPU and SPU) is described once in a data file: mnemonic, encoding, operand fields
-and cycle cost. A build-time generator produces the decoder tables, disassembler and test stubs.
-Handlers are hand-written, named after the mnemonic, and follow the manual's pseudocode.
+Each instruction is one row in a C++ opcode table that sits next to its handlers: mnemonic, format,
+opcode numbers, handler and operand layout (e.g. `"rD, d(rA)"`). The decoder, disassembler and a
+small assembler are all driven by these tables, so they cannot disagree. Handlers are named after
+the mnemonic and follow the manual's pseudocode.
+
+The assembler exists so tests can be written as readable assembly text.
 
 ### 5.3 PPU
 - Full register state: GPR, FPR, VR, CR, LR, CTR, XER, FPSCR, VSCR.
 - The `sc` instruction calls into the LV2 kernel (syscall number in r11).
 - Each of the two hardware threads is modeled as an independent context.
+- Not implemented yet: the load/store string instructions (`lswi`, `lswx`, `stswi`, `stswx`),
+  which compilers rarely emit.
 
 ### 5.4 SPU
 - **SPU floats:** a dedicated `spu_float` type implements the non-IEEE single-precision rules.
@@ -112,10 +117,10 @@ Handlers are hand-written, named after the mnemonic, and follow the manual's pse
 
 ### 5.5 Atomics
 PPU (`lwarx`/`stwcx.`) and SPU (`getllar`/`putllc`) atomics share one mechanism:
-- Memory keeps a **version number for every 128-byte line**. Any write bumps it.
-- Taking a reservation records the line's version. A conditional store succeeds only if the
-  version is unchanged.
-- The same check raises the SPU "reservation lost" event.
+- `Memory` keeps a short list of active reservations, one per thread, each covering a 128-byte line.
+- Every write removes the reservations on the lines it touches.
+- A conditional store succeeds only if the thread's reservation is still there.
+- The same check will raise the SPU "reservation lost" event.
 
 ### 5.6 JIT (later)
 Not planned for early milestones. When added, it must pass differential tests against the
@@ -195,11 +200,15 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
 
 ## 10. Verifying accuracy
 
-There is **no PS3 hardware available yet**, so ground truth comes from, in order of trust:
+There is **no PS3 hardware available yet**, so ground truth comes from:
 1. **Architecture manuals** (Cell, SPU ISA, PowerPC). Instruction tests are written from their
    pseudocode.
-2. **IBM's Cell simulator** (systemsim), if a copy can be obtained.
-3. **Black-box comparison with other emulators**: run the same test program and compare its output.
+2. **LLVM, as an independent implementation.** Our assembler and disassembler are checked against
+   instruction encodings produced by LLVM's PowerPC assembler, covering every opcode.
+3. **Native execution.** The example programs are C; their expected output comes from compiling
+   the same C for the host and running it there.
+4. **IBM's Cell simulator** (systemsim), if a copy can be obtained.
+5. **Black-box comparison with other emulators**: run the same test program and compare its output.
    We never read their source (see §11).
 
 **Hardware harness (prepared now, used later):** a PSL1GHT program that runs instruction test cases
@@ -208,8 +217,9 @@ everything above.
 
 **Test suites:**
 - Instruction unit tests: inputs → expected outputs and flags, for every instruction.
-- Homebrew tests: small PSL1GHT programs (console output, threads, SPU mailboxes, DMA, atomics, a
-  triangle, an audio tone) with known-good output logs and framebuffer hashes.
+- Example programs (`examples/`): small guest programs built with LLVM, whose output must match a
+  `.expected` file exactly. Later, PSL1GHT programs (threads, SPU mailboxes, DMA, a triangle, an
+  audio tone) with known-good logs and framebuffer hashes.
 - Determinism tests: two runs must produce identical state hashes.
 - CI runs everything headless, using the `Null` GPU backend.
 
@@ -256,7 +266,8 @@ src/
   vfs/  audio/  input/  platform/
   debug/       tracing, GDB server, snapshots
   frontend/    CLI
-tests/         unit tests; homebrew test programs and expected outputs
+examples/      guest programs (assembly and C) that run as integration tests
+tests/         unit tests, mirroring src/; shared fixtures in tests/support/
 tools/         code generators, trace diff
 docs/          this spec and notes
 ```
@@ -272,8 +283,8 @@ ASan/UBSan.
 | # | Milestone | Done when |
 |---|---|---|
 | M0 ✅ | Skeleton | Builds; CLI loads an ELF and lists its segments; CI runs. |
-| M1 | PPU integer core | Integer/branch/load-store tests pass; PSL1GHT "hello world" prints. |
-| M2 | Kernel basics | Threads, locks, timers and the scheduler work, deterministically. |
+| M1 ✅ | PPU integer core | Integer/branch/load-store/atomic tests pass; compiled C programs run and print. |
+| M2 | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
 | M3 | PPU float + vector | FPU and VMX tests pass, including flags. |
 | M4 | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
 | M5 | First pixels | FIFO + state model; Metal draws a PSL1GHT triangle matching its golden hash. |
@@ -286,10 +297,9 @@ ASan/UBSan.
 
 ## 15. Open questions
 
-1. Instruction-definition format: YAML/TOML plus a Python generator, or C++ `constexpr` tables?
-   (Leaning towards a data file, since it also feeds the disassembler and docs.)
-2. Default time-slice size: settle by experiment.
-3. Can a copy of IBM systemsim be obtained legally?
+1. Default time-slice size: settle by experiment once there are multiple threads (M2).
+2. Can a copy of IBM systemsim be obtained legally?
+3. The initial register state LV2 gives a new process (beyond r1, r2 and pc) is unverified.
 
 ---
 

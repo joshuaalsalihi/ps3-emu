@@ -55,6 +55,16 @@ This project is clean-room and 0BSD-licensed.
   emulators (e.g. RPCS3) or from proprietary/leaked SDKs. Do not search for or open such code.
 - Never commit firmware, keys, game files or other copyrighted material.
 
+## Adding an instruction
+
+1. Write the handler next to similar ones (e.g. `src/cpu/ppu/integer.cpp`), following the manual's
+   pseudocode.
+2. Add a row to that file's opcode table. The decoder, disassembler and assembler all use it.
+3. Add a reference encoding to `tests/cpu/ppu/assembler_test.cpp`, generated with
+   `llvm-mc -triple=powerpc64 -show-encoding`. A test fails if any opcode lacks one.
+4. Add behavior tests using the `PpuTest` fixture, which runs assembly text:
+   `run({"addi r3, r1, -8"}); CHECK(r(3) == ...);`
+
 ## Testing
 
 - Every instruction gets unit tests covering normal cases and edge cases (flags, overflow, NaN,
@@ -62,6 +72,8 @@ This project is clean-room and 0BSD-licensed.
 - Every bug fix comes with a test that fails without the fix.
 - There is no PS3 hardware yet. Derive expected values from the manuals and say so in the test.
   Mark anything uncertain with `// UNVERIFIED:` so it can be checked on hardware later.
+- Don't trust hand-computed constants for large values; check them independently (e.g. with
+  Python, or by running the same C natively, as the `examples/*.expected` files do).
 
 ## Build and test
 
@@ -72,11 +84,14 @@ automatically if it isn't installed.
 cmake -S . -B build -G Ninja      # Debug build with ASan/UBSan by default
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/src/ps3emu info <file.elf>
+./build/src/ps3emu run --trace build/examples/hello.elf
 ```
 
 - Warnings are errors. Fix them; don't suppress them.
 - Run `clang-format -i` on changed files before committing. CI checks formatting.
-- Tests mirror the source tree: `src/loader/elf.cpp` → `tests/loader/elf_test.cpp`.
-- Test inputs are built in code (see `make_elf` in `tests/loader/elf_test.cpp`) rather than
-  committed as binaries, so each test shows exactly what it feeds the parser.
+- Tests mirror the source tree: `src/loader/elf.cpp` → `tests/loader/elf_test.cpp`. Shared
+  fixtures live in `tests/support/`.
+- Test inputs are built in code (`tests/support/elf_builder.h`, the PPU assembler) rather than
+  committed as binaries, so each test shows exactly what it runs.
+- The programs in `examples/` need LLVM (`brew install llvm lld` or `apt install clang lld`).
+  CMake skips them, with a message, if it can't find a PowerPC-capable toolchain.

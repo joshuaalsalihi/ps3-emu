@@ -10,9 +10,20 @@ FetchContent_Declare(Catch2
 FetchContent_MakeAvailable(Catch2)
 
 add_executable(ps3emu_tests
+    common/bits_test.cpp
     common/endian_test.cpp
+    core/memory_test.cpp
+    core/system_test.cpp
+    cpu/ppu/assembler_test.cpp
+    cpu/ppu/branch_test.cpp
+    cpu/ppu/decoder_test.cpp
+    cpu/ppu/integer_test.cpp
+    cpu/ppu/load_store_test.cpp
     loader/elf_test.cpp
+    loader/program_test.cpp
+    lv2/kernel_test.cpp
 )
+target_include_directories(ps3emu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ps3emu_tests PRIVATE ps3emu_core Catch2::Catch2WithMain)
 
 include(Catch)

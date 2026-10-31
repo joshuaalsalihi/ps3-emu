@@ -145,12 +145,9 @@ std::string segment_type_name(u32 type) {
 
 std::string segment_flags_string(u32 flags) {
     std::string result = "---";
-    if (flags & k_segment_flag_r)
-        result[0] = 'R';
-    if (flags & k_segment_flag_w)
-        result[1] = 'W';
-    if (flags & k_segment_flag_x)
-        result[2] = 'X';
+    if (flags & k_segment_flag_r) result[0] = 'R';
+    if (flags & k_segment_flag_w) result[1] = 'W';
+    if (flags & k_segment_flag_x) result[2] = 'X';
     return result;
 }
 

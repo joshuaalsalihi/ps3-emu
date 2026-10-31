@@ -1,2 +1,8 @@
 CompileFlags:
   CompilationDatabase: build
+---
+# The example programs are PowerPC guest code, not host code.
+If:
+  PathMatch: examples/.*
+CompileFlags:
+  Add: [--target=powerpc64-unknown-none, -mabi=elfv2, -ffreestanding]
