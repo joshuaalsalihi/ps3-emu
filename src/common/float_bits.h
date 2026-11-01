@@ -7,8 +7,6 @@
 
 #include "common/types.h"
 
-namespace ppu {
-
 // lfs: converts a single-precision bit pattern to double precision. Exact for every input.
 constexpr u64 single_to_double_bits(u32 word) {
     const u64 sign = u64{word >> 31} << 63;
@@ -56,5 +54,3 @@ constexpr u32 double_to_single_bits(u64 bits) {
     }
     return sign | static_cast<u32>((fraction >> 29) & 0x7f'ffff);
 }
-
-} // namespace ppu

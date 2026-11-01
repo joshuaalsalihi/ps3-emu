@@ -24,6 +24,14 @@ add_executable(ps3emu_tests
     cpu/ppu/integer_test.cpp
     cpu/ppu/load_store_test.cpp
     cpu/ppu/vector_test.cpp
+    cpu/spu/assembler_test.cpp
+    cpu/spu/branch_test.cpp
+    cpu/spu/control_test.cpp
+    cpu/spu/floating_point_test.cpp
+    cpu/spu/integer_test.cpp
+    cpu/spu/load_store_test.cpp
+    cpu/spu/shift_rotate_test.cpp
+    cpu/spu/spu_float_test.cpp
     hle/linker_test.cpp
     hle/nid_test.cpp
     loader/elf_test.cpp

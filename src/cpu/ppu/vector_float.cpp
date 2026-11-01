@@ -10,8 +10,8 @@
 //    large saturate to the biggest value, 0x7fffffff.
 // Either way the arithmetic is soft_float's; this file decodes and encodes the elements.
 
+#include "common/float_bits.h"
 #include "common/soft_float.h"
-#include "cpu/ppu/float_bits.h"
 #include "cpu/ppu/vector_ops.h"
 
 #include <bit>

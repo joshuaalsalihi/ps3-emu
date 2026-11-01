@@ -5,7 +5,7 @@
 // Naming: "u" forms (update) write the effective address back to rA after the access;
 // "x" forms (indexed) add rB instead of an immediate offset; "a" forms sign-extend.
 
-#include "cpu/ppu/float_bits.h"
+#include "common/float_bits.h"
 #include "cpu/ppu/opcodes.h"
 
 #include <array>

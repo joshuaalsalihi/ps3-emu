@@ -17,6 +17,18 @@ add_library(ps3emu_core STATIC
     cpu/ppu/vector_float.cpp
     cpu/ppu/vector_integer.cpp
     cpu/ppu/vector_permute.cpp
+    cpu/spu/assembler.cpp
+    cpu/spu/branch.cpp
+    cpu/spu/control.cpp
+    cpu/spu/disassembler.cpp
+    cpu/spu/floating_point.cpp
+    cpu/spu/integer.cpp
+    cpu/spu/interpreter.cpp
+    cpu/spu/load_store.cpp
+    cpu/spu/opcodes.cpp
+    cpu/spu/operands.cpp
+    cpu/spu/shift_rotate.cpp
+    cpu/spu/spu_float.cpp
     hle/linker.cpp
     hle/nid.cpp
     hle/sys_prx_for_user.cpp

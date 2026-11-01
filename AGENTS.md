@@ -63,12 +63,12 @@ This project is clean-room and 0BSD-licensed.
 1. Write the handler next to similar ones (e.g. `src/cpu/ppu/integer.cpp`), following the manual's
    pseudocode.
 2. Add a row to that file's opcode table. The decoder, disassembler and assembler all use it.
-3. Add a reference encoding to `tests/cpu/ppu/assembler_test.cpp`, generated with
-   `llvm-mc -triple=powerpc64 -show-encoding`. A test fails if any opcode lacks one.
+3. Add a reference encoding to `tests/cpu/ppu/assembler_test.cpp` (or `tests/cpu/spu/…`),
+   generated with `llvm-mc -triple=powerpc64 -show-encoding`. A test fails if any opcode lacks one.
    LLVM lacks the Cell-only PPU instructions and the SPU, so take those encodings from the PS3
    toolchain's assemblers in the Docker image (`tools/build-psl1ght-image.sh`): `ppu-as -mcell`,
    or `spu-as` followed by `spu-objdump -d`.
-4. Add behavior tests using the `PpuTest` fixture, which runs assembly text:
+4. Add behavior tests using the `PpuTest` or `SpuTest` fixture, which runs assembly text:
    `run({"addi r3, r1, -8"}); CHECK(r(3) == ...);`
 
 ## Adding a syscall or library function
