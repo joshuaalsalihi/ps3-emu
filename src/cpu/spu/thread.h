@@ -24,8 +24,8 @@ struct Stop {
     u32 signal = 0; // stop: the signal type
 };
 
-// The signal type stopd reports. UNVERIFIED: the SPU ISA doesn't give one; this is stop's
-// largest type, so it can't collide with a real stop.
+// The signal type stopd reports. The SPU ISA doesn't give one; psdevwiki ("Synergistic
+// Processing Unit (SPU)") says 0x3fff, stop's largest type.
 constexpr u32 k_stopd_signal = 0x3fff;
 
 // An SPU's execution context: registers, local store, and what instruction handlers need.

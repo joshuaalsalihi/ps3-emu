@@ -1,0 +1,8 @@
+spu: waiting for commands
+spu: 2 x 3 + 4 = 10
+ppu: user event from the calculator, port 2: 2 -> 10
+spu: 10 x 20 + 30 = 230
+ppu: user event from the calculator, port 2: 10 -> 230
+spu: 7 x 7 + 7 = 56
+ppu: user event from the calculator, port 2: 7 -> 56
+group ended: cause 2, commands handled 3

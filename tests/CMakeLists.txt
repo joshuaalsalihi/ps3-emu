@@ -26,7 +26,9 @@ add_executable(ps3emu_tests
     cpu/ppu/vector_test.cpp
     cpu/spu/assembler_test.cpp
     cpu/spu/branch_test.cpp
+    cpu/spu/channels_test.cpp
     cpu/spu/control_test.cpp
+    cpu/spu/dma_test.cpp
     cpu/spu/floating_point_test.cpp
     cpu/spu/integer_test.cpp
     cpu/spu/load_store_test.cpp
@@ -36,9 +38,12 @@ add_executable(ps3emu_tests
     hle/nid_test.cpp
     loader/elf_test.cpp
     loader/process_info_test.cpp
+    loader/spu_elf_test.cpp
     loader/program_test.cpp
+    lv2/event_test.cpp
     lv2/kernel_test.cpp
     lv2/memory_test.cpp
+    lv2/spu_test.cpp
     lv2/sync_test.cpp
 )
 # The host-comparison tests change the FPU rounding mode, so the compiler must not assume it's fixed.

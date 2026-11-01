@@ -34,6 +34,8 @@ const char* wait_kind_name(WaitKind kind) {
     case WaitKind::mutex: return "mutex";
     case WaitKind::cond: return "condition variable";
     case WaitKind::semaphore: return "semaphore";
+    case WaitKind::spu_group: return "SPU thread group";
+    case WaitKind::event_queue: return "event queue";
     }
     return "?";
 }
@@ -42,8 +44,9 @@ const char* wait_kind_name(WaitKind kind) {
 
 Kernel::Kernel(Memory& memory, VirtualClock& clock, std::ostream& tty)
     : memory(memory), clock(clock), tty(tty) {
-    for (const auto table : {process_syscalls(), thread_syscalls(), sync_syscalls(),
-                             time_syscalls(), memory_syscalls(), tty_syscalls(), fs_syscalls()}) {
+    for (const auto table :
+         {process_syscalls(), thread_syscalls(), sync_syscalls(), time_syscalls(),
+          memory_syscalls(), tty_syscalls(), fs_syscalls(), spu_syscalls(), event_syscalls()}) {
         for (const SyscallInfo& info : table) {
             syscalls_[info.number] = &info;
         }
@@ -178,25 +181,41 @@ PpuThread* Kernel::find_thread(u32 id) {
     return nullptr;
 }
 
+namespace {
+
+bool is_alive(ThreadStatus status) {
+    return status == ThreadStatus::ready || status == ThreadStatus::waiting;
+}
+
+} // namespace
+
 bool Kernel::all_threads_finished() const {
     for (const auto& thread : threads_) {
-        if (thread->status == ThreadStatus::ready || thread->status == ThreadStatus::waiting) {
-            return false;
-        }
+        if (is_alive(thread->status)) return false;
+    }
+    for (const auto& thread : spu_threads_) {
+        if (is_alive(thread->status)) return false;
     }
     return true;
 }
 
-PpuThread* Kernel::next_thread() {
-    // Look at each thread once, starting after the one picked last time.
-    for (std::size_t step = 0; step < threads_.size(); ++step) {
-        const std::size_t index = (next_to_schedule_ + step) % threads_.size();
-        if (threads_[index]->status == ThreadStatus::ready) {
+Runnable Kernel::next_thread() {
+    // Look at each thread once, starting after the one picked last time. Positions below
+    // threads_.size() are PPU threads; the rest are SPU threads.
+    const std::size_t total = threads_.size() + spu_threads_.size();
+    for (std::size_t step = 0; step < total; ++step) {
+        const std::size_t index = (next_to_schedule_ + step) % total;
+        if (index < threads_.size()) {
+            if (threads_[index]->status != ThreadStatus::ready) continue;
             next_to_schedule_ = index + 1;
-            return threads_[index].get();
+            return {threads_[index].get(), nullptr};
         }
+        SpuThread& spu = *spu_threads_[index - threads_.size()];
+        if (spu.status != ThreadStatus::ready) continue;
+        next_to_schedule_ = index + 1;
+        return {nullptr, &spu};
     }
-    return nullptr;
+    return {};
 }
 
 // ---- Waiting ----
@@ -258,9 +277,17 @@ void Kernel::wake_timed_out_threads() {
 
 bool Kernel::skip_to_next_timeout() {
     std::optional<u64> next;
+    auto consider = [&](u64 deadline) { next = std::min(next.value_or(deadline), deadline); };
     for (const auto& thread : threads_) {
         if (thread->status == ThreadStatus::waiting && thread->wait.deadline) {
-            next = std::min(next.value_or(*thread->wait.deadline), *thread->wait.deadline);
+            consider(*thread->wait.deadline);
+        }
+    }
+    // A stalled SPU thread may be waiting for its DMA or its decrementer.
+    for (const auto& thread : spu_threads_) {
+        if (thread->status != ThreadStatus::waiting || !thread->blocked_channel) continue;
+        if (const auto deadline = thread->spe->channels.next_deadline(*thread->blocked_channel)) {
+            consider(*deadline);
         }
     }
     if (!next) return false;
@@ -274,6 +301,17 @@ std::string Kernel::describe_waits() const {
         if (thread->status != ThreadStatus::waiting) continue;
         text += std::format("\n  thread {:#x} \"{}\" waits on {} {:#x}", thread->id, thread->name,
                             wait_kind_name(thread->wait.kind), thread->wait.object);
+    }
+    for (const auto& thread : spu_threads_) {
+        if (thread->status != ThreadStatus::waiting) continue;
+        if (thread->waiting_queue != 0) {
+            text += std::format("\n  SPU thread {:#x} \"{}\" waits on event queue {:#x}",
+                                thread->id, thread->name, thread->waiting_queue);
+            continue;
+        }
+        const u32 channel = *thread->blocked_channel;
+        text += std::format("\n  SPU thread {:#x} \"{}\" waits on channel {} ({})", thread->id,
+                            thread->name, channel, spu::channel_name(channel).value_or("?"));
     }
     return text;
 }

@@ -19,8 +19,10 @@ add_library(ps3emu_core STATIC
     cpu/ppu/vector_permute.cpp
     cpu/spu/assembler.cpp
     cpu/spu/branch.cpp
+    cpu/spu/channels.cpp
     cpu/spu/control.cpp
     cpu/spu/disassembler.cpp
+    cpu/spu/dma.cpp
     cpu/spu/floating_point.cpp
     cpu/spu/integer.cpp
     cpu/spu/interpreter.cpp
@@ -28,6 +30,7 @@ add_library(ps3emu_core STATIC
     cpu/spu/opcodes.cpp
     cpu/spu/operands.cpp
     cpu/spu/shift_rotate.cpp
+    cpu/spu/spe.cpp
     cpu/spu/spu_float.cpp
     hle/linker.cpp
     hle/nid.cpp
@@ -35,13 +38,18 @@ add_library(ps3emu_core STATIC
     loader/elf.cpp
     loader/process_info.cpp
     loader/program.cpp
+    loader/spu_elf.cpp
     lv2/kernel.cpp
+    lv2/kernel_event.cpp
     lv2/kernel_memory.cpp
+    lv2/kernel_spu.cpp
     lv2/kernel_sync.cpp
+    lv2/sys_event.cpp
     lv2/sys_fs.cpp
     lv2/sys_memory.cpp
     lv2/sys_ppu_thread.cpp
     lv2/sys_process.cpp
+    lv2/sys_spu.cpp
     lv2/sys_sync.cpp
     lv2/sys_time.cpp
     lv2/sys_tty.cpp

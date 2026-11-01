@@ -6,8 +6,10 @@
 #include "core/range_allocator.h"
 #include "lv2/errors.h"
 #include "lv2/objects.h"
+#include "lv2/spu_thread.h"
 #include "lv2/thread.h"
 
+#include <array>
 #include <iosfwd>
 #include <map>
 #include <memory>
@@ -40,6 +42,16 @@ std::span<const SyscallInfo> time_syscalls();
 std::span<const SyscallInfo> memory_syscalls();
 std::span<const SyscallInfo> tty_syscalls();
 std::span<const SyscallInfo> fs_syscalls();
+std::span<const SyscallInfo> spu_syscalls();
+std::span<const SyscallInfo> event_syscalls();
+
+// A thread the scheduler can run next: a PPU thread or an SPU thread.
+struct Runnable {
+    PpuThread* ppu = nullptr;
+    SpuThread* spu = nullptr;
+
+    explicit operator bool() const { return ppu || spu; }
+};
 
 // High-level emulation of the LV2 kernel: threads, scheduling, synchronization and memory.
 //
@@ -108,8 +120,9 @@ public:
     const std::vector<std::unique_ptr<PpuThread>>& threads() const { return threads_; }
     bool all_threads_finished() const;
 
-    // The next thread to run, taking turns in creation order. Null if none is ready.
-    PpuThread* next_thread();
+    // The next thread to run, taking turns: PPU threads in creation order, then SPU threads in
+    // creation order. Empty if none is ready.
+    Runnable next_thread();
 
     // Makes `thread` wait. `timeout_us` of 0 means no timeout, as in LV2's own syscalls.
     void wait(PpuThread& thread, Wait wait, u64 timeout_us);
@@ -126,6 +139,40 @@ public:
     bool skip_to_next_timeout();
     // One line per waiting thread, for deadlock reports.
     std::string describe_waits() const;
+
+    // ---- SPU threads (kernel_spu.cpp) ----
+
+    // SPUs available to programs: six of the Cell's eight. PSL1GHT, sys/spu.h.
+    static constexpr u32 k_spu_count = 6;
+    // UNVERIFIED: the priority range for SPU thread groups (lower numbers are more urgent).
+    static constexpr s32 k_min_spu_priority = 16;
+    static constexpr s32 k_max_spu_priority = 255;
+
+    // Debug option for new SPU threads: DMA completes the moment it is issued.
+    bool instant_dma = false;
+
+    s32 create_spu_thread_group(u32 size, s32 priority, std::string name, u32& group_id);
+    s32 destroy_spu_thread_group(u32 group_id);
+    // Creates thread `index` of a group and loads `image` into its local store.
+    s32 initialize_spu_thread(u32 group_id, u32 index, const SpuImage& image, std::string name,
+                              const std::array<u64, 4>& arguments, u32& thread_id);
+    s32 start_spu_thread_group(u32 group_id);
+    s32 terminate_spu_thread_group(u32 group_id, s32 value);
+    // Waits for the group's threads to end, then writes the cause and status. Returns a result,
+    // or nothing if the thread now waits.
+    std::optional<s32> join_spu_thread_group(PpuThread& thread, u32 group_id, u32 cause_address,
+                                             u32 status_address);
+
+    SpuThread* find_spu_thread(u32 id);
+    const std::vector<std::unique_ptr<SpuThread>>& spu_threads() const { return spu_threads_; }
+
+    // An SPU thread executed `stop`. Returns false if LV2 gives the signal no meaning, which
+    // ends the run with a fault.
+    bool handle_spu_stop(SpuThread& thread, u32 signal);
+    // An SPU thread stalled on a channel; it waits until the access can complete.
+    void block_spu_thread(SpuThread& thread, u32 channel);
+    // Lets SPU DMA progress, and wakes SPU threads whose channel access can now complete.
+    void update_spu_threads();
 
     // ---- Objects (kernel.cpp) ----
 
@@ -158,6 +205,33 @@ public:
     s32 post_semaphore(u32 semaphore_id, s32 count);
     s32 destroy_semaphore(u32 semaphore_id);
 
+    // ---- Event queues and ports (kernel_event.cpp) ----
+
+    s32 create_event_queue(u32 protocol, u32 type, u64 key, s32 size, u32& queue_id);
+    s32 destroy_event_queue(u32 queue_id, u32 mode);
+    // Takes the oldest event, or waits for one. A PPU thread gets its event in r4-r7.
+    std::optional<s32> receive_event(PpuThread& thread, u32 queue_id, u64 timeout_us);
+    // Takes up to `max` waiting events without waiting.
+    s32 try_receive_events(u32 queue_id, u32 max, std::vector<Event>& events);
+    s32 drain_event_queue(u32 queue_id);
+    // Delivers an event to the queue's first waiter, or keeps it. EBUSY if the queue is full.
+    s32 send_event(u32 queue_id, const Event& event);
+
+    s32 create_event_port(u32 type, u64 name, u32& port_id);
+    s32 destroy_event_port(u32 port_id);
+    s32 connect_event_port(u32 port_id, u32 queue_id);
+    s32 disconnect_event_port(u32 port_id);
+    s32 send_event_from_port(u32 port_id, u64 data1, u64 data2, u64 data3);
+
+    // SPU threads send events through their ports and receive them from bound queues.
+    s32 connect_spu_thread_event(u32 thread_id, u32 queue_id, u32 type, u32 port);
+    s32 disconnect_spu_thread_event(u32 thread_id, u32 type, u32 port);
+    s32 bind_spu_thread_queue(u32 thread_id, u32 queue_id, u32 number);
+    s32 unbind_spu_thread_queue(u32 thread_id, u32 number);
+    // The SPU thread wrote SPU_WrOutIntrMbox, which interrupts the PPU: LV2 sends the event
+    // it describes.
+    void handle_spu_interrupt(SpuThread& thread);
+
     // ---- Memory (kernel_memory.cpp) ----
 
     // sys_memory_allocate: maps fresh memory somewhere in user memory.
@@ -181,8 +255,14 @@ private:
 
     std::map<u32, const SyscallInfo*> syscalls_;
 
-    std::vector<std::unique_ptr<PpuThread>> threads_; // in creation order
-    std::size_t next_to_schedule_ = 0;                // where the round-robin search starts
+    void load_spu_thread(SpuThread& thread);
+    void receive_spu_event(SpuThread& thread, bool can_wait);
+    SpuThread* first_spu_waiter(u32 queue_id);
+    void end_spu_thread_group(SpuThreadGroup& group, u32 group_id, u32 cause, s32 status);
+
+    std::vector<std::unique_ptr<PpuThread>> threads_;     // in creation order
+    std::vector<std::unique_ptr<SpuThread>> spu_threads_; // in creation order
+    std::size_t next_to_schedule_ = 0; // where the round-robin search starts, over both lists
     u64 tls_address_ = 0;
     u64 tls_file_size_ = 0;
     u64 tls_memory_size_ = 0;

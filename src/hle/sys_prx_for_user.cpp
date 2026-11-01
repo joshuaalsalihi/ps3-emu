@@ -5,6 +5,8 @@
 // memory. We only keep the kernel object's ID there; the object does the real work.
 
 #include "hle/linker.h"
+#include "loader/elf.h"
+#include "loader/spu_elf.h"
 
 namespace hle {
 
@@ -261,6 +263,68 @@ void sys_mmapper_unmap_memory(Kernel& kernel, PpuThread& thread) {
     thread.set_result(result);
 }
 
+// ---- SPU images ----
+// sys_spu_image_t: {u32 type, u32 entry_point, u32 segments, u32 segment_count}, where segments
+// points to sys_spu_segment_t {u32 type, u32 ls_start, u32 size, u32 pa_start or value}.
+// PSL1GHT, lv2/spu.h.
+//
+// UNVERIFIED: the firmware copies the ELF into kernel memory; we build the segment table in user
+// memory and point copy segments at the program's own ELF, which it keeps for its lifetime.
+
+constexpr u64 k_segment_table_size = 0x1'0000; // one 64 KB page
+constexpr u64 k_page_64k_flag = 0x200;         // PSL1GHT, sys/memory.h
+
+// int sys_spu_image_import(sys_spu_image_t* image, const void* elf, u32 type)
+void sys_spu_image_import(Kernel& kernel, PpuThread& thread) {
+    const u32 image = thread.pointer_arg(0);
+    const u32 elf_address = thread.pointer_arg(1);
+    if (!kernel.memory.is_accessible(image, 16, Memory::k_write)) {
+        return thread.set_result(lv2::k_error_bad_address);
+    }
+
+    loader::SpuElf elf;
+    try {
+        elf = loader::read_spu_elf(kernel.memory, elf_address);
+    } catch (const loader::LoadError&) {
+        return thread.set_result(lv2::k_error_invalid);
+    }
+
+    std::vector<lv2::SpuSegment> segments;
+    for (const loader::SpuElfSegment& s : elf.segments) {
+        if (s.file_size != 0) {
+            segments.push_back({lv2::k_spu_segment_copy, s.local_address, s.file_size,
+                                elf_address + s.file_offset});
+        }
+        if (s.memory_size > s.file_size) {
+            segments.push_back({lv2::k_spu_segment_fill, s.local_address + s.file_size,
+                                s.memory_size - s.file_size, 0});
+        }
+    }
+
+    u32 table = 0;
+    const s32 result = kernel.allocate_memory(k_segment_table_size, k_page_64k_flag, table);
+    if (result != lv2::k_ok) return thread.set_result(result);
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+        const u32 entry = table + 16 * static_cast<u32>(i);
+        kernel.memory.write<u32>(entry, segments[i].type);
+        kernel.memory.write<u32>(entry + 4, segments[i].local_address);
+        kernel.memory.write<u32>(entry + 8, segments[i].size);
+        kernel.memory.write<u32>(entry + 12, segments[i].source_or_value);
+    }
+
+    kernel.memory.write<u32>(image, static_cast<u32>(thread.arg(2)));
+    kernel.memory.write<u32>(image + 4, elf.entry);
+    kernel.memory.write<u32>(image + 8, table);
+    kernel.memory.write<u32>(image + 12, static_cast<u32>(segments.size()));
+    thread.set_result(lv2::k_ok);
+}
+
+// int sys_spu_image_close(sys_spu_image_t* image)
+void sys_spu_image_close(Kernel& kernel, PpuThread& thread) {
+    const u32 table = kernel.memory.read<u32>(thread.pointer_arg(0) + 8);
+    thread.set_result(kernel.free_memory(table));
+}
+
 constexpr FunctionInfo k_functions[] = {
     {"sys_process_exit", sys_process_exit},
     {"sys_ppu_thread_create", sys_ppu_thread_create},
@@ -287,6 +351,8 @@ constexpr FunctionInfo k_functions[] = {
     {"sys_mmapper_free_memory", sys_mmapper_free_memory},
     {"sys_mmapper_map_memory", sys_mmapper_map_memory},
     {"sys_mmapper_unmap_memory", sys_mmapper_unmap_memory},
+    {"sys_spu_image_import", sys_spu_image_import},
+    {"sys_spu_image_close", sys_spu_image_close},
 };
 
 } // namespace

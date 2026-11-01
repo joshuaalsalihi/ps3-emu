@@ -14,6 +14,7 @@
 struct RunOptions {
     u64 max_instructions = std::numeric_limits<u64>::max();
     std::ostream* trace = nullptr; // if set, every instruction and call is printed here
+    bool instant_dma = false;      // SPU DMA completes the moment it is issued (for debugging)
 };
 
 struct RunResult {
@@ -50,6 +51,7 @@ public:
 private:
     // Handles whatever stopped `thread`. Returns false if the run must end with a fault.
     bool handle_stop(lv2::PpuThread& thread, std::ostream* trace);
+    bool run_spu_thread(lv2::SpuThread& thread, u64 budget, std::ostream* trace, RunResult& result);
 
     VirtualClock clock_;
     Memory memory_;

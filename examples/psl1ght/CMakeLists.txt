@@ -14,13 +14,26 @@ endif()
 message(STATUS "PSL1GHT examples: using the Docker image ps3emu-psl1ght")
 
 # add_psl1ght_program(<name>) builds <name>.elf from <name>.c and tests it against <name>.expected.
+# If <name>_spu.c exists, it is compiled for the SPU and embedded as the array <name>_spu_elf.
 function(add_psl1ght_program name)
     set(elf ${CMAKE_CURRENT_BINARY_DIR}/${name}.elf)
+    set(spu_build "")
+    set(spu_object "")
+    set(sources ${name}.c)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${name}_spu.c)
+        string(CONCAT spu_build
+            "spu-gcc -O2 -Wall -I\$PS3DEV/spu/include /source/${name}_spu.c"
+            " -L\$PS3DEV/spu/lib -lsputhread -o /build/${name}_spu.elf"
+            " && bin2s /build/${name}_spu.elf > /build/${name}_spu.S && ")
+        set(spu_object /build/${name}_spu.S)
+        list(APPEND sources ${name}_spu.c)
+    endif()
+    file(GLOB headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
+
     # sprxlinker fills in the import counts, as PSL1GHT's own build does.
-    set(build_command
-        "ppu-gcc -mcpu=cell -O2 -Wall -I\$PS3DEV/ppu/include /source/${name}.c"
+    string(CONCAT build_command ${spu_build}
+        "ppu-gcc -mcpu=cell -O2 -Wall -I\$PS3DEV/ppu/include /source/${name}.c ${spu_object}"
         " -L\$PS3DEV/ppu/lib -lrt -llv2 -lm -o /build/${name}.elf && sprxlinker /build/${name}.elf")
-    string(CONCAT build_command ${build_command})
 
     add_custom_command(
         OUTPUT ${elf}
@@ -29,7 +42,7 @@ function(add_psl1ght_program name)
                 -v ${CMAKE_CURRENT_BINARY_DIR}:/build
                 ps3emu-psl1ght sh -c ${build_command}
         COMMAND ${CMAKE_COMMAND} -D FILE=${elf} -P ${CMAKE_CURRENT_SOURCE_DIR}/require_file.cmake
-        DEPENDS ${name}.c
+        DEPENDS ${sources} ${headers}
         COMMENT "Compiling PSL1GHT ${name}.elf (in Docker)"
         VERBATIM)
     add_custom_target(psl1ght_${name} ALL DEPENDS ${elf})
@@ -45,3 +58,5 @@ endfunction()
 add_psl1ght_program(hello)
 add_psl1ght_program(threads)
 add_psl1ght_program(floats)
+add_psl1ght_program(spu_threads)
+add_psl1ght_program(spu_events)

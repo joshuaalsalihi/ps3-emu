@@ -19,6 +19,9 @@ public:
         return cycles_ * 399 / 16'000;
     }
 
+    // The first cycle at which timebase() reaches `ticks`.
+    static constexpr u64 cycle_of_timebase(u64 ticks) { return (ticks * 16'000 + 398) / 399; }
+
 private:
     u64 cycles_ = 0;
 };
