@@ -40,9 +40,11 @@ add_library(ps3emu_core STATIC
     loader/program.cpp
     loader/spu_elf.cpp
     lv2/kernel.cpp
+    lv2/kernel_event.cpp
     lv2/kernel_memory.cpp
     lv2/kernel_spu.cpp
     lv2/kernel_sync.cpp
+    lv2/sys_event.cpp
     lv2/sys_fs.cpp
     lv2/sys_memory.cpp
     lv2/sys_ppu_thread.cpp

@@ -24,6 +24,17 @@ std::string describe_stop(const ppu::Thread& cpu) {
     return text + ")";
 }
 
+std::string describe_unknown_spu_stop(u32 signal) {
+    // The SPU C runtime's exit() (also reached by returning from main) is `stop 0x2000 |
+    // status`, a convention of Linux's SPU runtime. LV2's meaning for it, if any, is unknown.
+    if ((signal & ~0xffu) == 0x2000) {
+        return std::format("stop {:#x}: exit({}) from the SPU C runtime, which LV2 doesn't "
+                           "define; use spu_thread_exit instead",
+                           signal, signal & 0xff);
+    }
+    return std::format("stop {:#x}, which LV2 gives no meaning", signal);
+}
+
 } // namespace
 
 System::System(std::ostream& tty) : kernel_(memory_, clock_, tty) {}
@@ -137,10 +148,11 @@ bool System::run_spu_thread(lv2::SpuThread& thread, u64 budget, std::ostream* tr
     switch (run.exit) {
     case spu::SpeExit::budget: return true;
     case spu::SpeExit::stalled: kernel_.block_spu_thread(thread, run.channel); return true;
+    case spu::SpeExit::interrupt: kernel_.handle_spu_interrupt(thread); return true;
     case spu::SpeExit::stopped:
         if (trace) *trace << std::format("    SPU stop {:#x}\n", run.signal);
         if (kernel_.handle_spu_stop(thread, run.signal)) return true;
-        fault = std::format("stop {:#x}, which LV2 gives no meaning", run.signal);
+        fault = describe_unknown_spu_stop(run.signal);
         break;
     case spu::SpeExit::fault: fault = run.message; break;
     }

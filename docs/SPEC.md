@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.7 · 2026-11-01 · M4 complete
+**Status:** Draft v0.8 · 2026-11-01 · M4 complete, plus event queues
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -157,7 +157,9 @@ with soft_float so every host agrees.
   at the timebase rate), tag-group status, list stall-and-notify, atomic status and SRR0. The
   interpreter stops on `rdch`, `rchcnt` and `wrch` with pc on the instruction; `spu::run`
   performs them. Each channel has a count, as the CBEA defines it, and an access stalls exactly
-  when that count is 0. A stall leaves pc on the instruction and becomes a scheduler wait.
+  when that count is 0. A stall leaves pc on the instruction and becomes a scheduler wait. A
+  write to `SPU_WrOutIntrMbox` returns from `spu::run` too, since it interrupts the PPU: the
+  kernel takes the value straight away.
 - **MFC DMA** (`spu::Dma`, CBEA chapter 7): a 16-entry queue of gets, puts, lists (with
   stall-and-notify), signals, barriers and cache hints. The engine runs one command at a time in
   issue order, which satisfies every fence and barrier, and moves the data when a command
@@ -210,8 +212,9 @@ interpreter. On macOS it needs `MAP_JIT` memory and the `allow-jit` entitlement.
 - A stalled SPU thread waits until its channel's count is no longer 0. Before each turn, the
   kernel lets every SPU's DMA progress and wakes the threads that can continue.
 - A wait on DMA or the decrementer is a timeout like any other: when every thread is waiting, the
-  clock jumps to the next DMA completion. Waits on mailboxes and signals have no deadline, so a
-  program that never sends one deadlocks, and the report names the SPU's channel.
+  clock jumps to the next DMA completion. Waits on mailboxes, signals and event queues have no
+  deadline, so a program that never sends one deadlocks, and the report names the SPU's channel
+  or queue.
 - Every SPU's actions advance the same virtual clock as the PPU's.
 
 **Timing levels:**
@@ -254,8 +257,16 @@ A multi-threaded mode for speed may come later. It will not support replay or tr
   its status in the outbound mailbox (PSL1GHT's `spu_thread_exit` and `spu_thread_group_exit`);
   `sys_spu_thread_group_join` reports how the group ended. A group can be started again, from a
   fresh copy of its images. The PPU reaches its SPUs through mailbox, signal and local store
-  syscalls. Not implemented yet: raw SPUs, SPU thread event ports and queues (which
-  `spu_printf` uses), and other stop codes, which end the run with a clear fault.
+  syscalls. Not implemented yet: raw SPUs, and other stop codes, which end the run with a clear
+  fault. That includes `stop 0x20xx`, the SPU C runtime's `exit()` (a Linux convention).
+- **Event queues** hold events (four 64-bit words) until a thread receives them; a PPU thread gets
+  its event in r4-r7. A PPU event port sends to one queue. Each SPU thread has 64 ports of its
+  own: writing `SPU_WrOutIntrMbox` stops the SPU so the kernel can send the event it describes
+  (port and 24 bits of data, plus a word from the outbound mailbox), and the result comes back in
+  the inbound mailbox. SPU threads receive from SPU queues bound to them with `stop 0x110` (or
+  `0x111`, which doesn't wait). PSL1GHT's `spu_printf` is built on these: a PPU thread receives
+  each request and formats it from the SPU's local store. The protocols come from PSL1GHT's SPU
+  runtime library. Not implemented yet: SPU thread group events and DMA events.
 - **Executable formats**, in order: ELF → fake-signed SELF (PSL1GHT output) → retail SELF/SPRX using
   keys derived from user-supplied firmware. Decryption lives in an optional `crypto/` module.
 - **VFS** maps `/dev_hdd0`, `/dev_bdvd`, `/app_home`, `/dev_flash`, etc. to host folders, using PS3
@@ -325,7 +336,7 @@ everything above.
 - Instruction unit tests: inputs → expected outputs and flags, for every instruction.
 - Example programs (`examples/`): small guest programs built with LLVM, whose output must match a
   `.expected` file exactly, and PSL1GHT programs (threads, floats, SPU threads with mailboxes,
-  DMA and atomics). Later: a triangle and an audio tone, with framebuffer and audio hashes.
+  DMA, atomics, event queues and `spu_printf`). Later: a triangle and an audio tone, with framebuffer and audio hashes.
 - Determinism tests: two runs must produce identical state hashes.
 - CI runs everything headless, using the `Null` GPU backend.
 
@@ -417,7 +428,7 @@ ASan/UBSan.
 8. A formal definition of `lvlx`/`lvrx`/`stvlx`/`stvrx`; ours follows the handbook's description.
 9. SPU details the ISA leaves to the implementation: the `frest`/`frsqest` tables, whether the
    Cell's SPU flushes double-precision denormals and propagates NaNs, whether it has the
-   optional v1.2 instructions, which SPRs exist, and the signal type `stopd` reports.
+   optional v1.2 instructions, and which SPRs exist.
 10. Real MFC timing: DMA latency and bandwidth under load (we use 256 cycles plus 8 bytes per
     cycle, one command at a time), and how quickly the immediate atomic commands complete.
 11. LV2's SPU behavior where we had to choose: a full inbound mailbox makes
@@ -425,6 +436,11 @@ ASan/UBSan.
     status 0; a group whose threads all exit reports status 0; the priority range is 16-255; the
     decrementer reads 0 until first written; and the registers a new SPU thread starts with
     (beyond pc, `$1` and `$3`-`$6`).
+12. LV2's event queue behavior where we had to choose: the source of events from an unnamed port
+    (we use the port's ID); that SPU threads get only the low 32 bits of each data word; which
+    errors SPU-side receives give (ESRCH for an unbound number, EBUSY for an empty queue on
+    `tryreceive`, ECANCELED when the queue is destroyed); that only SPU queues can be bound and
+    PPU threads can't receive from them; and that a connected port can't be destroyed.
 
 ---
 

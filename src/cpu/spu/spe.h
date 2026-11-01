@@ -35,7 +35,10 @@ enum class SpeExit {
     budget,  // it used its instruction budget
     stalled, // a channel access must wait; pc stays on it, to be run again later
     stopped, // stop or stopd; pc is after it
-    fault,   // halt, illegal instruction, invalid channel or DMA error; pc is on the instruction
+    // wrch to SPU_WrOutIntrMbox, which interrupts the PPU so the kernel can take the value;
+    // pc is after it
+    interrupt,
+    fault, // halt, illegal instruction, invalid channel or DMA error; pc is on the instruction
 };
 
 struct SpeRun {

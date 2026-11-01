@@ -9,6 +9,7 @@
 #include "lv2/thread.h"
 
 #include <array>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,6 +27,18 @@ constexpr u32 k_spu_join_terminated = 0x4;       // the PPU called sys_spu_threa
 constexpr u32 k_spu_stop_group_exit = 0x101;
 constexpr u32 k_spu_stop_thread_exit = 0x102;
 constexpr u32 k_spu_stop_yield = 0x103;
+// Receiving from an event queue bound to the thread: the binding's number is in the outbound
+// mailbox, and the result, then the event's three data words, come back in the inbound mailbox.
+// PSL1GHT's libsputhread: spu_thread_receive_event and spu_thread_tryreceive_event.
+constexpr u32 k_spu_stop_receive_event = 0x110;
+constexpr u32 k_spu_stop_try_receive_event = 0x111;
+
+// SPU thread events: sent by writing SPU_WrOutIntrMbox, to the queue connected to one of the
+// thread's 64 ports. PSL1GHT, sys/spu.h and the SPU's sys/spu_event.h.
+constexpr u32 k_spu_thread_event_user = 1;
+constexpr u32 k_spu_thread_event_dma = 2;
+constexpr u64 k_spu_thread_event_user_key = 0xffff'ffff'5350'5501; // the events' source
+constexpr u32 k_spu_event_port_count = 64;
 
 // How a thread's local store is set up: segments copied from guest memory or filled with a
 // value. PSL1GHT, lv2/spu.h: sys_spu_segment_t.
@@ -55,6 +68,8 @@ struct SpuThread {
     std::unique_ptr<spu::Spe> spe;
     ThreadStatus status = ThreadStatus::stopped;
     std::optional<u32> blocked_channel; // while waiting: the channel it stalled on
+    u32 waiting_queue = 0;              // while waiting: the event queue it receives from
+    u64 wait_sequence = 0;              // arrival order among a queue's waiters
 
     // What each start restores: the loaded image and the arguments for $3-$6.
     std::vector<u8> initial_local_store;
@@ -63,6 +78,11 @@ struct SpuThread {
     bool needs_reload = false; // the local store no longer holds the fresh image
 
     std::optional<s32> exit_status; // set by spu_thread_exit
+
+    // Event queues: the one connected to each SPU port (0 if none), and those bound for
+    // receiving, by binding number. These outlast restarts of the group.
+    std::array<u32, k_spu_event_port_count> event_ports{};
+    std::map<u32, u32> bound_queues;
 };
 
 struct SpuThreadGroup : KernelObject {

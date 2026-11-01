@@ -7,7 +7,8 @@ how the Cell processor works.
 
 **Status:** milestone M4 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
 multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included),
-`malloc`, and SPU threads that talk to the PPU through mailboxes, DMA and atomics.
+`malloc`, and SPU threads that talk to the PPU through mailboxes, DMA, atomics and event queues
+(`spu_printf` included).
 
 - **CPU:** the PS3's main core (the PPU) runs its full user instruction set: integer, branch,
   load/store, atomics, floating point (with every FPSCR flag) and the VMX vector unit, including
@@ -68,6 +69,12 @@ group ended: cause 2
 spu 0: exit status 100, sum x 3 = 31344
 spu 1: exit status 101, sum x 5 = 374800
 counter: 3000
+
+$ ./build/src/ps3emu run build/examples/psl1ght/spu_events.elf
+spu: waiting for commands
+spu: 2 x 3 + 4 = 10
+ppu: user event from the calculator, port 2: 2 -> 10
+...
 
 $ ./build/src/ps3emu run --trace build/examples/hello.elf
 --- thread 0x1000 "main"

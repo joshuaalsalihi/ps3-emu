@@ -7,6 +7,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <initializer_list>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -29,6 +31,15 @@ constexpr u32 k_read_ls = 182;
 constexpr u32 k_write_snr = 184;
 constexpr u32 k_set_spu_cfg = 187;
 constexpr u32 k_write_spu_mb = 190;
+constexpr u32 k_connect_event = 191;
+constexpr u32 k_disconnect_event = 192;
+constexpr u32 k_bind_queue = 193;
+constexpr u32 k_unbind_queue = 194;
+constexpr u32 k_queue_create = 128;
+constexpr u32 k_queue_receive = 130;
+constexpr u32 k_port_create = 134;
+constexpr u32 k_port_connect = 136;
+constexpr u32 k_port_send = 138;
 
 // Where the test puts things in the data page.
 constexpr u64 k_code = KernelTest::k_data;
@@ -43,6 +54,9 @@ constexpr u64 k_thread_id = KernelTest::k_data + 0x504;
 constexpr u64 k_cause = KernelTest::k_data + 0x508;
 constexpr u64 k_status = KernelTest::k_data + 0x50c;
 constexpr u64 k_value = KernelTest::k_data + 0x510;
+constexpr u64 k_queue_attr = KernelTest::k_data + 0x520;
+constexpr u64 k_queue_id = KernelTest::k_data + 0x540;
+constexpr u64 k_port_id = KernelTest::k_data + 0x544;
 
 class SpuKernelTest : public KernelTest {
 public:
@@ -56,7 +70,9 @@ public:
 
     // Writes an SPU program and an image that copies it to local store address 0.
     void write_program(std::initializer_list<std::string_view> program) {
-        const std::vector<std::string_view> lines(program);
+        write_program(std::vector<std::string_view>(program));
+    }
+    void write_program(const std::vector<std::string_view>& lines) {
         const std::vector<u32> words = spu::assemble(lines, 0);
         for (std::size_t i = 0; i < words.size(); ++i) {
             memory.write<u32>(k_code + 4 * i, words[i]);
@@ -91,8 +107,29 @@ public:
         const spu::SpeRun run = spu::run(*thread.spe, 10'000);
         if (run.exit == spu::SpeExit::stalled) kernel.block_spu_thread(thread, run.channel);
         if (run.exit == spu::SpeExit::stopped) kernel.handle_spu_stop(thread, run.signal);
+        if (run.exit == spu::SpeExit::interrupt) kernel.handle_spu_interrupt(thread);
         return run;
     }
+
+    u32 create_queue(u32 type) {
+        memory.write<u32>(k_queue_attr, k_protocol_fifo);
+        memory.write<u32>(k_queue_attr + 4, type);
+        syscall(ppu, k_queue_create, {k_queue_id, k_queue_attr, 0, 8});
+        REQUIRE(result(ppu) == k_ok);
+        return memory.read<u32>(k_queue_id);
+    }
+
+    // A PPU port connected to `queue`, for sending it events.
+    u32 create_port(u32 queue) {
+        syscall(ppu, k_port_create, {k_port_id, k_event_port_local, 0x99});
+        const u32 port = memory.read<u32>(k_port_id);
+        syscall(ppu, k_port_connect, {port, queue});
+        REQUIRE(result(ppu) == k_ok);
+        return port;
+    }
+
+    // The exit status the thread passed to spu_thread_exit.
+    std::optional<s32> exit_status(std::size_t i = 0) { return spu_thread(i).exit_status; }
 
     PpuThread& ppu = new_thread();
     std::vector<u32> threads;
@@ -360,4 +397,169 @@ TEST_CASE_METHOD(SpuKernelTest, "a stalled SPU thread shows up in deadlock repor
     syscall(ppu, k_group_start, {memory.read<u32>(k_group_id)});
     run_spu(spu_thread());
     CHECK(kernel.describe_waits().find("waits on channel 29 (SPU_RdInMbox)") != std::string::npos);
+}
+
+// ---- Events ----
+
+// spu_thread_send_event(3, 0x1234, 0x99), as PSL1GHT's libsputhread does it, then exits with the
+// result.
+constexpr std::initializer_list<std::string_view> k_send_event = {
+    "il $5, 0x99",     "wrch $ch28, $5",                    // data1
+    "ilhu $8, 0x0300", "iohl $8, 0x1234", "wrch $ch30, $8", // port 3, data0
+    "rdch $3, $ch29",  "wrch $ch28, $3",  "stop 0x102",
+};
+
+TEST_CASE_METHOD(SpuKernelTest, "an SPU thread sends an event through a connected port") {
+    write_program(k_send_event);
+    const u32 group = create_group();
+    const u32 queue = create_queue(k_event_queue_ppu);
+    syscall(ppu, k_connect_event, {threads[0], queue, k_spu_thread_event_user, 3});
+    REQUIRE(result(ppu) == k_ok);
+    syscall(ppu, k_group_start, {group});
+
+    CHECK(run_spu(spu_thread()).exit == spu::SpeExit::interrupt);
+    run_spu(spu_thread());
+    CHECK(exit_status() == k_ok);
+
+    syscall(ppu, k_queue_receive, {queue, 0, 0});
+    REQUIRE(result(ppu) == k_ok);
+    const auto& gpr = ppu.cpu.state.gpr;
+    CHECK(gpr[4] == k_spu_thread_event_user_key);
+    CHECK(gpr[5] == threads[0]);
+    CHECK(gpr[6] == 0x3'0000'1234); // the port, then data0
+    CHECK(gpr[7] == 0x99);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "sending through an unconnected port fails") {
+    write_program(k_send_event);
+    const u32 group = create_group();
+    syscall(ppu, k_group_start, {group});
+    run_spu(spu_thread());
+    run_spu(spu_thread());
+    CHECK(exit_status() == k_error_not_connected);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "a receiving PPU thread is woken by an SPU's event") {
+    write_program(k_send_event);
+    const u32 group = create_group();
+    const u32 queue = create_queue(k_event_queue_ppu);
+    syscall(ppu, k_connect_event, {threads[0], queue, k_spu_thread_event_user, 3});
+    syscall(ppu, k_group_start, {group});
+    syscall(ppu, k_queue_receive, {queue, 0, 0});
+    CHECK(is_waiting(ppu));
+
+    run_spu(spu_thread());
+    CHECK_FALSE(is_waiting(ppu));
+    CHECK(result(ppu) == k_ok);
+    CHECK(ppu.cpu.state.gpr[7] == 0x99);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "a thrown event gets no reply") {
+    write_program({"il $5, 1", "wrch $ch28, $5", "ilhu $8, 0x4300", "wrch $ch30, $8",
+                   "rchcnt $3, $ch29", "wrch $ch28, $3", "stop 0x102"});
+    const u32 group = create_group();
+    const u32 queue = create_queue(k_event_queue_ppu);
+    syscall(ppu, k_connect_event, {threads[0], queue, k_spu_thread_event_user, 3});
+    syscall(ppu, k_group_start, {group});
+    run_spu(spu_thread());
+    run_spu(spu_thread());
+    CHECK(exit_status() == 0); // the inbound mailbox stayed empty
+    CHECK(kernel.find_object<EventQueue>(queue)->events.size() == 1);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "an SPU port connects to one queue at a time") {
+    write_program({"stop 0x102"});
+    create_group();
+    const u32 queue = create_queue(k_event_queue_ppu);
+    syscall(ppu, k_connect_event, {threads[0], queue, k_spu_thread_event_user, 64});
+    CHECK(result(ppu) == k_error_invalid);
+    syscall(ppu, k_connect_event, {threads[0], queue, k_spu_thread_event_user, 63});
+    CHECK(result(ppu) == k_ok);
+    syscall(ppu, k_connect_event, {threads[0], queue, k_spu_thread_event_user, 63});
+    CHECK(result(ppu) == k_error_is_connected);
+    syscall(ppu, k_disconnect_event, {threads[0], k_spu_thread_event_user, 63});
+    CHECK(result(ppu) == k_ok);
+    syscall(ppu, k_disconnect_event, {threads[0], k_spu_thread_event_user, 63});
+    CHECK(result(ppu) == k_error_not_connected);
+}
+
+// spu_thread_receive_event(5, ...) (stop 0x110) or spu_thread_tryreceive_event (stop 0x111),
+// then exits with the error, or with the three data words added together.
+std::vector<std::string_view> receive_event(std::string_view stop) {
+    return {"il $3, 5",       "wrch $ch28, $3", stop,
+            "rdch $3, $ch29", "brnz $3, 0x28", // an error: exit with it
+            "rdch $4, $ch29", "rdch $5, $ch29", "rdch $6, $ch29",
+            "a $3, $4, $5",   "a $3, $3, $6",   "wrch $ch28, $3",
+            "stop 0x102"};
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "an SPU thread receives a waiting event from a bound queue") {
+    write_program(receive_event("stop 0x110"));
+    const u32 group = create_group();
+    const u32 queue = create_queue(k_event_queue_spu);
+    syscall(ppu, k_bind_queue, {threads[0], queue, 5});
+    REQUIRE(result(ppu) == k_ok);
+    syscall(ppu, k_port_send, {create_port(queue), 1, 20, 300});
+    REQUIRE(result(ppu) == k_ok);
+
+    syscall(ppu, k_group_start, {group});
+    run_spu(spu_thread()); // to the stop
+    run_spu(spu_thread());
+    CHECK(exit_status() == 321);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "an SPU thread waits for an event on an empty queue") {
+    write_program(receive_event("stop 0x110"));
+    const u32 group = create_group();
+    const u32 queue = create_queue(k_event_queue_spu);
+    syscall(ppu, k_bind_queue, {threads[0], queue, 5});
+    syscall(ppu, k_group_start, {group});
+    run_spu(spu_thread());
+    CHECK(spu_thread().status == ThreadStatus::waiting);
+    kernel.update_spu_threads();
+    CHECK(spu_thread().status == ThreadStatus::waiting); // not until an event arrives
+    CHECK(kernel.describe_waits().find("event queue") != std::string::npos);
+    CHECK_FALSE(kernel.skip_to_next_timeout()); // no deadline: only an event ends the wait
+
+    syscall(ppu, k_port_send, {create_port(queue), 4, 5, 6});
+    CHECK(spu_thread().status == ThreadStatus::ready);
+    CHECK(kernel.find_object<EventQueue>(queue)->events.empty());
+    run_spu(spu_thread());
+    CHECK(exit_status() == 15);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "tryreceive on an empty queue fails instead of waiting") {
+    write_program(receive_event("stop 0x111"));
+    const u32 group = create_group();
+    const u32 queue = create_queue(k_event_queue_spu);
+    syscall(ppu, k_bind_queue, {threads[0], queue, 5});
+    syscall(ppu, k_group_start, {group});
+    run_spu(spu_thread());
+    run_spu(spu_thread());
+    CHECK(exit_status() == k_error_busy);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "receiving through an unbound number fails") {
+    write_program(receive_event("stop 0x110"));
+    const u32 group = create_group();
+    syscall(ppu, k_group_start, {group});
+    run_spu(spu_thread());
+    run_spu(spu_thread());
+    CHECK(exit_status() == k_error_no_such_id);
+}
+
+TEST_CASE_METHOD(SpuKernelTest, "only SPU queues can be bound, each number once") {
+    write_program({"stop 0x102"});
+    create_group();
+    syscall(ppu, k_bind_queue, {threads[0], create_queue(k_event_queue_ppu), 5});
+    CHECK(result(ppu) == k_error_invalid);
+    const u32 queue = create_queue(k_event_queue_spu);
+    syscall(ppu, k_bind_queue, {threads[0], queue, 5});
+    CHECK(result(ppu) == k_ok);
+    syscall(ppu, k_bind_queue, {threads[0], queue, 5});
+    CHECK(result(ppu) == k_error_busy);
+    syscall(ppu, k_unbind_queue, {threads[0], 5});
+    CHECK(result(ppu) == k_ok);
+    syscall(ppu, k_unbind_queue, {threads[0], 5});
+    CHECK(result(ppu) == k_error_no_such_id);
 }

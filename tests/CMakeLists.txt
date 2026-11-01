@@ -40,6 +40,7 @@ add_executable(ps3emu_tests
     loader/process_info_test.cpp
     loader/spu_elf_test.cpp
     loader/program_test.cpp
+    lv2/event_test.cpp
     lv2/kernel_test.cpp
     lv2/memory_test.cpp
     lv2/spu_test.cpp

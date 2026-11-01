@@ -244,6 +244,30 @@ void sys_spu_thread_get_spu_cfg(Kernel& kernel, PpuThread& thread) {
     thread.set_result(k_ok);
 }
 
+// int sys_spu_thread_connect_event(sys_spu_thread_t id, sys_event_queue_t eq,
+//                                  sys_event_type_t et, uint8_t spup)
+void sys_spu_thread_connect_event(Kernel& kernel, PpuThread& thread) {
+    thread.set_result(kernel.connect_spu_thread_event(id_arg(thread, 0), id_arg(thread, 1),
+                                                      id_arg(thread, 2), thread.arg(3) & 0xff));
+}
+
+// int sys_spu_thread_disconnect_event(sys_spu_thread_t id, sys_event_type_t et, uint8_t spup)
+void sys_spu_thread_disconnect_event(Kernel& kernel, PpuThread& thread) {
+    thread.set_result(kernel.disconnect_spu_thread_event(id_arg(thread, 0), id_arg(thread, 1),
+                                                         thread.arg(2) & 0xff));
+}
+
+// int sys_spu_thread_bind_queue(sys_spu_thread_t id, sys_event_queue_t spuq, uint32_t spuq_num)
+void sys_spu_thread_bind_queue(Kernel& kernel, PpuThread& thread) {
+    thread.set_result(
+        kernel.bind_spu_thread_queue(id_arg(thread, 0), id_arg(thread, 1), id_arg(thread, 2)));
+}
+
+// int sys_spu_thread_unbind_queue(sys_spu_thread_t id, uint32_t spuq_num)
+void sys_spu_thread_unbind_queue(Kernel& kernel, PpuThread& thread) {
+    thread.set_result(kernel.unbind_spu_thread_queue(id_arg(thread, 0), id_arg(thread, 1)));
+}
+
 constexpr SyscallInfo k_syscalls[] = {
     {165, "sys_spu_thread_get_exit_status", sys_spu_thread_get_exit_status},
     {166, "sys_spu_thread_set_argument", sys_spu_thread_set_argument},
@@ -262,6 +286,10 @@ constexpr SyscallInfo k_syscalls[] = {
     {187, "sys_spu_thread_set_spu_cfg", sys_spu_thread_set_spu_cfg},
     {188, "sys_spu_thread_get_spu_cfg", sys_spu_thread_get_spu_cfg},
     {190, "sys_spu_thread_write_spu_mb", sys_spu_thread_write_spu_mb},
+    {191, "sys_spu_thread_connect_event", sys_spu_thread_connect_event},
+    {192, "sys_spu_thread_disconnect_event", sys_spu_thread_disconnect_event},
+    {193, "sys_spu_thread_bind_queue", sys_spu_thread_bind_queue},
+    {194, "sys_spu_thread_unbind_queue", sys_spu_thread_unbind_queue},
 };
 
 } // namespace

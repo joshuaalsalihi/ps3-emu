@@ -381,10 +381,21 @@ TEST_CASE("an SPU fault ends the run with the SPU's instruction") {
 TEST_CASE("an SPU stop that LV2 doesn't know is a fault") {
     std::ostringstream tty;
     System system(tty);
-    system.load(make_test_program(k_run_spu_thread, spu_program_data({"stop 0x2000"})));
+    system.load(make_test_program(k_run_spu_thread, spu_program_data({"stop 0x1234"})));
 
     const RunResult result = system.run();
     CHECK(result.outcome == RunResult::Outcome::faulted);
     CHECK_THAT(result.message,
-               ContainsSubstring("stop 0x2000, which LV2 gives no meaning (pc 0x0: stop 0x2000)"));
+               ContainsSubstring("stop 0x1234, which LV2 gives no meaning (pc 0x0: stop 0x1234)"));
+}
+
+TEST_CASE("an SPU program calling exit() is told to use spu_thread_exit") {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data({"stop 0x2005"})));
+
+    const RunResult result = system.run();
+    CHECK(result.outcome == RunResult::Outcome::faulted);
+    CHECK_THAT(result.message, ContainsSubstring("stop 0x2005: exit(5) from the SPU C runtime"));
+    CHECK_THAT(result.message, ContainsSubstring("use spu_thread_exit instead"));
 }

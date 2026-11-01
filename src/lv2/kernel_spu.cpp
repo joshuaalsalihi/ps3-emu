@@ -109,6 +109,7 @@ void Kernel::load_spu_thread(SpuThread& thread) {
     thread.needs_reload = false;
     thread.exit_status.reset();
     thread.blocked_channel.reset();
+    thread.waiting_queue = 0;
 }
 
 s32 Kernel::start_spu_thread_group(u32 group_id) {
@@ -205,6 +206,8 @@ bool Kernel::handle_spu_stop(SpuThread& thread, u32 signal) {
         return true;
     }
     case k_spu_stop_yield: return true; // the scheduler moves on after every stop anyway
+    case k_spu_stop_receive_event: receive_spu_event(thread, true); return true;
+    case k_spu_stop_try_receive_event: receive_spu_event(thread, false); return true;
     default: return false;
     }
 }
@@ -218,7 +221,8 @@ void Kernel::block_spu_thread(SpuThread& thread, u32 channel) {
 void Kernel::update_spu_threads() {
     for (const auto& thread : spu_threads_) {
         thread->spe->channels.update();
-        if (thread->status == ThreadStatus::waiting && !thread->spe->blocked_channel()) {
+        if (thread->status == ThreadStatus::waiting && thread->waiting_queue == 0 &&
+            !thread->spe->blocked_channel()) {
             thread->status = ThreadStatus::ready;
             thread->blocked_channel.reset();
         }

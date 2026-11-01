@@ -78,9 +78,11 @@ TEST_CASE_METHOD(SpeTest, "writing a full outbound mailbox stalls until it is re
     CHECK_FALSE(spe.channels.read_out_mbox());
 }
 
-TEST_CASE_METHOD(SpeTest, "the outbound interrupt mailbox") {
+TEST_CASE_METHOD(SpeTest, "writing the outbound interrupt mailbox interrupts the PPU") {
     set_value(3, 0x77);
-    REQUIRE(finished(run({"wrch $ch30, $3"})));
+    const auto result = run({"wrch $ch30, $3", "lnop"});
+    CHECK(result.exit == spu::SpeExit::interrupt);
+    CHECK(spe.cpu.state.pc == 4); // after the wrch
     CHECK(spe.channels.read_out_intr_mbox() == 0x77);
 }
 

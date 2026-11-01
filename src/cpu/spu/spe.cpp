@@ -77,6 +77,10 @@ SpeRun run(Spe& spe, u64 budget, std::ostream* trace) {
             const u32 value = t.preferred(op.rt());
             if (trace) *trace << std::format("    {} <- {:#x}\n", describe_channel(number), value);
             channels.write(number, value);
+            if (number == channel::k_wr_out_intr_mbox) {
+                t.state.pc = (t.state.pc + 4) & k_lslr;
+                return {SpeExit::interrupt, executed, number, 0, ""};
+            }
         }
         t.state.pc = (t.state.pc + 4) & k_lslr;
     }

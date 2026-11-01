@@ -35,6 +35,7 @@ const char* wait_kind_name(WaitKind kind) {
     case WaitKind::cond: return "condition variable";
     case WaitKind::semaphore: return "semaphore";
     case WaitKind::spu_group: return "SPU thread group";
+    case WaitKind::event_queue: return "event queue";
     }
     return "?";
 }
@@ -45,7 +46,7 @@ Kernel::Kernel(Memory& memory, VirtualClock& clock, std::ostream& tty)
     : memory(memory), clock(clock), tty(tty) {
     for (const auto table :
          {process_syscalls(), thread_syscalls(), sync_syscalls(), time_syscalls(),
-          memory_syscalls(), tty_syscalls(), fs_syscalls(), spu_syscalls()}) {
+          memory_syscalls(), tty_syscalls(), fs_syscalls(), spu_syscalls(), event_syscalls()}) {
         for (const SyscallInfo& info : table) {
             syscalls_[info.number] = &info;
         }
@@ -284,7 +285,7 @@ bool Kernel::skip_to_next_timeout() {
     }
     // A stalled SPU thread may be waiting for its DMA or its decrementer.
     for (const auto& thread : spu_threads_) {
-        if (thread->status != ThreadStatus::waiting) continue;
+        if (thread->status != ThreadStatus::waiting || !thread->blocked_channel) continue;
         if (const auto deadline = thread->spe->channels.next_deadline(*thread->blocked_channel)) {
             consider(*deadline);
         }
@@ -303,6 +304,11 @@ std::string Kernel::describe_waits() const {
     }
     for (const auto& thread : spu_threads_) {
         if (thread->status != ThreadStatus::waiting) continue;
+        if (thread->waiting_queue != 0) {
+            text += std::format("\n  SPU thread {:#x} \"{}\" waits on event queue {:#x}",
+                                thread->id, thread->name, thread->waiting_queue);
+            continue;
+        }
         const u32 channel = *thread->blocked_channel;
         text += std::format("\n  SPU thread {:#x} \"{}\" waits on channel {} ({})", thread->id,
                             thread->name, channel, spu::channel_name(channel).value_or("?"));

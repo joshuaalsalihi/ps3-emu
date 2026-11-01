@@ -43,6 +43,7 @@ std::span<const SyscallInfo> memory_syscalls();
 std::span<const SyscallInfo> tty_syscalls();
 std::span<const SyscallInfo> fs_syscalls();
 std::span<const SyscallInfo> spu_syscalls();
+std::span<const SyscallInfo> event_syscalls();
 
 // A thread the scheduler can run next: a PPU thread or an SPU thread.
 struct Runnable {
@@ -204,6 +205,33 @@ public:
     s32 post_semaphore(u32 semaphore_id, s32 count);
     s32 destroy_semaphore(u32 semaphore_id);
 
+    // ---- Event queues and ports (kernel_event.cpp) ----
+
+    s32 create_event_queue(u32 protocol, u32 type, u64 key, s32 size, u32& queue_id);
+    s32 destroy_event_queue(u32 queue_id, u32 mode);
+    // Takes the oldest event, or waits for one. A PPU thread gets its event in r4-r7.
+    std::optional<s32> receive_event(PpuThread& thread, u32 queue_id, u64 timeout_us);
+    // Takes up to `max` waiting events without waiting.
+    s32 try_receive_events(u32 queue_id, u32 max, std::vector<Event>& events);
+    s32 drain_event_queue(u32 queue_id);
+    // Delivers an event to the queue's first waiter, or keeps it. EBUSY if the queue is full.
+    s32 send_event(u32 queue_id, const Event& event);
+
+    s32 create_event_port(u32 type, u64 name, u32& port_id);
+    s32 destroy_event_port(u32 port_id);
+    s32 connect_event_port(u32 port_id, u32 queue_id);
+    s32 disconnect_event_port(u32 port_id);
+    s32 send_event_from_port(u32 port_id, u64 data1, u64 data2, u64 data3);
+
+    // SPU threads send events through their ports and receive them from bound queues.
+    s32 connect_spu_thread_event(u32 thread_id, u32 queue_id, u32 type, u32 port);
+    s32 disconnect_spu_thread_event(u32 thread_id, u32 type, u32 port);
+    s32 bind_spu_thread_queue(u32 thread_id, u32 queue_id, u32 number);
+    s32 unbind_spu_thread_queue(u32 thread_id, u32 number);
+    // The SPU thread wrote SPU_WrOutIntrMbox, which interrupts the PPU: LV2 sends the event
+    // it describes.
+    void handle_spu_interrupt(SpuThread& thread);
+
     // ---- Memory (kernel_memory.cpp) ----
 
     // sys_memory_allocate: maps fresh memory somewhere in user memory.
@@ -228,6 +256,8 @@ private:
     std::map<u32, const SyscallInfo*> syscalls_;
 
     void load_spu_thread(SpuThread& thread);
+    void receive_spu_event(SpuThread& thread, bool can_wait);
+    SpuThread* first_spu_waiter(u32 queue_id);
     void end_spu_thread_group(SpuThreadGroup& group, u32 group_id, u32 cause, s32 status);
 
     std::vector<std::unique_ptr<PpuThread>> threads_;     // in creation order
