@@ -15,6 +15,7 @@
 
 #include <array>
 #include <functional>
+#include <iosfwd>
 #include <optional>
 #include <string>
 
@@ -64,6 +65,8 @@ public:
     Rsx(Memory& memory, VirtualClock& clock);
 
     void set_backend(Backend* backend) { backend_ = backend; }
+    // If set, every method write is printed here.
+    std::ostream* trace = nullptr;
     // Called with every frame that reaches the display.
     std::function<void(const Frame&)> on_frame;
 
@@ -111,9 +114,13 @@ public:
     u32 put() const;
 
 private:
+    void run_commands();
     void execute(u32 subchannel, u32 method, u32 value);
     void execute_3d(u32 method, u32 value);
     void clear_surface(u32 mask);
+    std::optional<ColorSurface> color_surface();
+    Rect drawing_area() const;
+    void end_primitive();
     void queue_flip(u32 id);
     void complete_flip();
     u64 next_vblank() const;
@@ -143,6 +150,15 @@ private:
     u64 frames_ = 0;
 
     std::array<std::array<u32, 0x800>, 8> registers_{}; // 8 subchannels x 2048 methods
+
+    // Vertex program memory and constants, filled through windows of methods, and the
+    // primitive being drawn between BEGIN_END writes.
+    std::array<u32, vertex::k_instruction_slots * 4> transform_program_{};
+    u32 transform_program_position_ = 0; // in words
+    std::array<Vec4, vertex::k_constant_count> transform_constants_{};
+    u32 transform_constant_position_ = 0; // in components
+    std::optional<u32> primitive_;
+    std::vector<u32> draw_vertices_;
     std::optional<std::string> error_;
 };
 

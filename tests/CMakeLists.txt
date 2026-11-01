@@ -35,6 +35,7 @@ add_executable(ps3emu_tests
     cpu/spu/load_store_test.cpp
     cpu/spu/shift_rotate_test.cpp
     cpu/spu/spu_float_test.cpp
+    gpu/rasterizer_test.cpp
     hle/cell_gcm_sys_test.cpp
     hle/linker_test.cpp
     hle/nid_test.cpp
@@ -47,7 +48,11 @@ add_executable(ps3emu_tests
     lv2/memory_test.cpp
     lv2/spu_test.cpp
     lv2/sync_test.cpp
+    rsx/draw_test.cpp
+    rsx/fragment_program_test.cpp
     rsx/rsx_test.cpp
+    rsx/shader_float_test.cpp
+    rsx/vertex_program_test.cpp
 )
 # The host-comparison tests change the FPU rounding mode, so the compiler must not assume it's fixed.
 set_source_files_properties(common/soft_float_test.cpp PROPERTIES COMPILE_OPTIONS -frounding-math)

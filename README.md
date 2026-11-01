@@ -21,8 +21,9 @@ multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floa
 - **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
   with deterministic thread scheduling on a virtual clock.
 - **RSX (in progress):** the GPU's command FIFO and register state, display setup through
-  libgcm, clears and flips. A software reference renderer produces exact, host-independent
-  frames, which can be saved as PNGs or checked by hash.
+  libgcm, clears, flips, and triangles drawn with vertex and fragment programs. A software
+  reference renderer produces exact, host-independent frames, which can be saved as PNGs or
+  checked by hash.
 
 See the [spec](docs/SPEC.md) for the architecture and roadmap.
 

@@ -16,6 +16,7 @@ message(STATUS "PSL1GHT examples: using the Docker image ps3emu-psl1ght")
 # add_psl1ght_program(<name>) builds <name>.elf from <name>.c and tests it against <name>.expected,
 # and the frames it displays against <name>.frames if that exists.
 # If <name>_spu.c exists, it is compiled for the SPU and embedded as the array <name>_spu_elf.
+# Shaders <name>.vcg and <name>.fcg are assembled and embedded too (see below).
 function(add_psl1ght_program name)
     set(elf ${CMAKE_CURRENT_BINARY_DIR}/${name}.elf)
     set(spu_build "")
@@ -29,11 +30,32 @@ function(add_psl1ght_program name)
         set(spu_object /build/${name}_spu.S)
         list(APPEND sources ${name}_spu.c)
     endif()
+    # Shaders in ARB assembly (<name>.vcg, <name>.fcg) are assembled by cgcomp and embedded as
+    # <name>_vp_vpo and <name>_fp_fpo.
+    set(shader_build "")
+    set(shader_objects "")
+    foreach(kind vp fp)
+        if(kind STREQUAL vp)
+            set(extension vcg)
+            set(flag -v)
+        else()
+            set(extension fcg)
+            set(flag -f)
+        endif()
+        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${name}.${extension})
+            string(CONCAT shader_build ${shader_build}
+                "cgcomp -a ${flag} /source/${name}.${extension} /build/${name}_${kind}.${kind}o"
+                " && cd /build && bin2s ${name}_${kind}.${kind}o > ${name}_${kind}.S && cd / && ")
+            string(APPEND shader_objects " /build/${name}_${kind}.S")
+            list(APPEND sources ${name}.${extension})
+        endif()
+    endforeach()
     file(GLOB headers ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 
     # sprxlinker fills in the import counts, as PSL1GHT's own build does.
-    string(CONCAT build_command ${spu_build}
+    string(CONCAT build_command ${spu_build} ${shader_build}
         "ppu-gcc -mcpu=cell -O2 -Wall -I\$PS3DEV/ppu/include /source/${name}.c ${spu_object}"
+        "${shader_objects}"
         " -L\$PS3DEV/ppu/lib -lrsx -lgcm_sys -lsysutil -lrt -llv2 -lm -o /build/${name}.elf"
         " && sprxlinker /build/${name}.elf")
 
@@ -64,3 +86,4 @@ add_psl1ght_program(floats)
 add_psl1ght_program(spu_threads)
 add_psl1ght_program(spu_events)
 add_psl1ght_program(rsx_clear)
+add_psl1ght_program(rsx_triangle)

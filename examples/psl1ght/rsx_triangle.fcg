@@ -1,0 +1,4 @@
+!!ARBfp1.0
+# rsx_triangle's fragment program: the interpolated vertex color.
+MOV result.color, fragment.color;
+END

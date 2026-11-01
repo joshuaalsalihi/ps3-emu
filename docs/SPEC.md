@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.9 · 2026-11-01 · M5 in progress: the RSX clears and flips
+**Status:** Draft v0.10 · 2026-11-01 · M5 in progress: the RSX draws triangles
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -322,8 +322,19 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
 - **Frames:** each completed flip produces a frame: the display buffer as 8-bit RGB. `ps3emu run
   --frames FILE` writes each frame's SHA-1, and `--dump-frames DIR` saves PNGs. Example
   programs can have a `.frames` file of expected hashes, checked like their `.expected` output.
-- **Shaders:** RSX vertex and fragment programs are decoded into a shared IR, then emitted as Metal
-  Shading Language (SPIR-V later). Cached by hash.
+- **Shaders:** RSX vertex and fragment programs are decoded into a shared IR (`rsx::vertex` and
+  `rsx::fragment` instructions, with fields from nouveau's NV30/NV40 headers), which the reference
+  backend interprets and GPU backends will translate (Metal Shading Language first, SPIR-V
+  later; cached by hash). Shader arithmetic uses `soft_float` in single precision.
+- **Draws:** BEGIN_END and DRAW_ARRAYS collect vertex indices; ending the primitive builds a
+  draw request (vertex arrays, both programs, viewport, render target). Triangles, strips and
+  fans into one color target, with no depth test, blending or culling yet; enabling those ends
+  the run with a clear "not supported yet" error.
+- **Reference rasterization:** vertices go through the vertex program, the perspective divide
+  and the viewport transform, then snap to 1/16 pixel. Coverage is decided with integer edge
+  functions at pixel centers and a top-left fill rule, so triangles sharing an edge never both
+  cover a pixel. Attributes are interpolated with perspective correction, and the fragment
+  program's color is clamped and rounded to 8 bits per channel.
 - **Surfaces:** a cache tracks render targets. A CPU write to a surface's memory invalidates it;
   reading it back triggers a write-back. Start conservative; optimize later.
 - **Backends:** `Reference` (software, pixel by pixel into guest memory; exact and identical on
@@ -470,6 +481,11 @@ ASan/UBSan.
     whole 4096×4096 range); what the X8R8G8B8 formats store in the X byte; the vblank rate
     (60 Hz, not 59.94); libgcm's and sysutil's error codes (we return EINVAL); the flip status
     before the first reset; and the RSX's speed (a fixed 10,000 commands per turn).
+14. The RSX's shader and rasterization details: its floating-point rules (we assume IEEE single
+    rounded to nearest, denormals kept, NaN operands giving the default NaN, MAD rounding
+    twice, and exact RCP/RSQ); which sources each vertex opcode reads (we read ADD's second
+    operand from source 2); the subpixel precision (1/16) and fill rule; the flat-shading
+    vertex (the last); and how colors round to 8 bits (to nearest).
 
 ---
 
@@ -484,4 +500,6 @@ ASan/UBSan.
 - PSL1GHT: SDK headers and samples, for building test programs; its `rsx/nv40.h` carries
   nouveau's NV40 method numbers, and its stub libraries the NIDs of libgcm and sysutil
 - envytools: public NVIDIA hardware documentation for NV40/G70 commands, including the FIFO
-  command format
+  command format and the vertex program instruction layout ("Curie" XF ISA)
+- Mesa's nouveau driver headers (`nv30/nvfx_shader.h`, `nv30/nv40_vertprog.h`): NV30/NV40
+  vertex and fragment program encodings

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <format>
+#include <ostream>
 
 namespace rsx {
 
@@ -140,7 +141,15 @@ bool Rsx::has_work() const {
 
 void Rsx::run() {
     if (!initialized_ || error_) return;
-    if (queued_flip_ && clock_.cycles() >= next_vblank()) complete_flip();
+    try {
+        if (queued_flip_ && clock_.cycles() >= next_vblank()) complete_flip();
+        run_commands();
+    } catch (const MemoryFault& fault) {
+        fail(fault.what()); // a command made the RSX touch memory that isn't mapped
+    }
+}
+
+void Rsx::run_commands() {
 
     for (u64 done = 0; done < k_commands_per_turn && has_work(); ++done) {
         waiting_ = Waiting::nothing;
@@ -183,6 +192,7 @@ void Rsx::run() {
 }
 
 void Rsx::execute(u32 subchannel, u32 method, u32 value) {
+    if (trace) *trace << std::format("    RSX {}:{:#06x} = {:#010x}\n", subchannel, method, value);
     registers_[subchannel][method / 4] = value;
 
     // Methods below 0x100 belong to the FIFO channel itself, whatever the subchannel.
@@ -210,7 +220,36 @@ void Rsx::execute(u32 subchannel, u32 method, u32 value) {
 }
 
 void Rsx::execute_3d(u32 method, u32 value) {
+    // Windows of methods that stream data: each write takes the next word.
+    if (method >= method::k_transform_program && method < method::k_transform_program + 0x80) {
+        transform_program_[transform_program_position_++ % transform_program_.size()] = value;
+        return;
+    }
+    if (method >= method::k_transform_constant && method < method::k_transform_constant + 0x80) {
+        const u32 position = transform_constant_position_++ % (vertex::k_constant_count * 4);
+        transform_constants_[position / 4][position % 4] = value;
+        return;
+    }
+
     switch (method) {
+    case method::k_transform_program_load: transform_program_position_ = value * 4; break;
+    case method::k_transform_constant_load: transform_constant_position_ = value * 4; break;
+    case method::k_begin_end:
+        if (value != 0) {
+            primitive_ = value;
+            draw_vertices_.clear();
+        } else if (primitive_) {
+            end_primitive();
+        }
+        break;
+    case method::k_draw_arrays: {
+        const u32 first = value & 0xff'ffff;
+        const u32 count = (value >> 24) + 1;
+        for (u32 i = 0; i < count; ++i) {
+            draw_vertices_.push_back(first + i);
+        }
+        break;
+    }
     case method::k_clear_surface: clear_surface(value); break;
     case method::k_back_end_write_semaphore_release:
     case method::k_texture_read_semaphore_release:
@@ -231,9 +270,7 @@ void Rsx::clear_surface(u32 mask) {
     request.mask = mask;
     request.color = reg(method::k_color_clear_value);
     request.depth_value = reg(method::k_zstencil_clear_value);
-    request.area = intersect(
-        rect_from(reg(method::k_surface_clip_horizontal), reg(method::k_surface_clip_vertical)),
-        rect_from(reg(method::k_scissor_horizontal), reg(method::k_scissor_vertical)));
+    request.area = drawing_area();
 
     struct Target {
         u32 context, offset, pitch;
@@ -269,6 +306,106 @@ void Rsx::clear_surface(u32 mask) {
         }
     }
     if (backend_) backend_->clear(request);
+}
+
+// The first color target, where draws go.
+std::optional<ColorSurface> Rsx::color_surface() {
+    const u32 format = reg(method::k_surface_format) & 0x1f;
+    if (format != 4 && format != 5 && format != 8) {
+        fail(std::format("color surface format {} is not supported yet", format));
+        return std::nullopt;
+    }
+    if ((reg(method::k_surface_color_target) & 0xf) != 1) {
+        fail("drawing to color targets other than the first alone is not supported yet");
+        return std::nullopt;
+    }
+    const auto address =
+        resolve(reg(method::k_set_color_context_a), reg(method::k_surface_color_offset_a));
+    if (!address) {
+        fail("color surface 0 is at an unmapped offset");
+        return std::nullopt;
+    }
+    return ColorSurface{*address, reg(method::k_surface_pitch_a), static_cast<ColorFormat>(format)};
+}
+
+Rect Rsx::drawing_area() const {
+    return intersect(
+        rect_from(reg(method::k_surface_clip_horizontal), reg(method::k_surface_clip_vertical)),
+        rect_from(reg(method::k_scissor_horizontal), reg(method::k_scissor_vertical)));
+}
+
+// BEGIN_END(0): the vertices since BEGIN_END(type) are complete, so draw them.
+void Rsx::end_primitive() {
+    const u32 type = *primitive_;
+    primitive_.reset();
+
+    struct Unsupported {
+        u32 method;
+        const char* what;
+    };
+    for (const auto& [enable, what] :
+         {Unsupported{method::k_depth_test_enable, "depth testing"},
+          Unsupported{method::k_blend_enable, "blending"},
+          Unsupported{method::k_alpha_test_enable, "alpha testing"},
+          Unsupported{method::k_stencil_test_enable, "stencil testing"},
+          Unsupported{method::k_logic_op_enable, "logic operations"},
+          Unsupported{method::k_cull_face_enable, "face culling"}}) {
+        if (reg(enable) != 0) return fail(std::format("{} is not supported yet", what));
+    }
+
+    DrawRequest request;
+    switch (type) {
+    case method::k_triangles: request.primitive = Primitive::triangles; break;
+    case method::k_triangle_strip: request.primitive = Primitive::triangle_strip; break;
+    case method::k_triangle_fan: request.primitive = Primitive::triangle_fan; break;
+    default: return fail(std::format("primitive type {} is not supported yet", type));
+    }
+    request.vertices = std::move(draw_vertices_);
+
+    for (u32 i = 0; i < vertex::k_input_count; ++i) {
+        const u32 format = reg(method::k_vertex_data_array_format + 4 * i);
+        const u32 size = (format >> 4) & 0xf;
+        if (size == 0) continue; // not an array: the input reads 0, 0, 0, 1
+        const u32 type = format & 0xf;
+        if (type != method::k_vertex_float && type != method::k_vertex_ubyte) {
+            return fail(std::format("vertex attribute type {} is not supported yet", type));
+        }
+        const u32 offset = reg(method::k_vertex_data_array_offset + 4 * i);
+        const u32 context = (offset >> 31) ? method::k_context_main : method::k_context_local;
+        const auto address = resolve(context, offset & 0x7fff'ffff);
+        if (!address) return fail(std::format("vertex array {} is at an unmapped offset", i));
+        request.inputs[i] = VertexInput{*address, type, size, (format >> 8) & 0xff};
+    }
+
+    auto instructions =
+        vertex::decode_program(transform_program_, reg(method::k_transform_program_start));
+    if (!instructions) return fail("the vertex program has no last instruction");
+    request.vertex_program.instructions = std::move(*instructions);
+    request.vertex_program.constants = transform_constants_;
+
+    const u32 program = reg(method::k_shader_program);
+    const u32 program_context =
+        (program & 3) == 2 ? method::k_context_main : method::k_context_local;
+    const auto program_address = resolve(program_context, program & ~3u);
+    if (!program_address) return fail("the fragment program is at an unmapped offset");
+    auto fragment_program = fragment::decode_program(memory_, *program_address);
+    if (!fragment_program) return fail("the fragment program has no end");
+    request.fragment_program = std::move(*fragment_program);
+
+    for (u32 i = 0; i < 4; ++i) {
+        request.viewport_scale[i] = reg(method::k_viewport_scale + 4 * i);
+        request.viewport_offset[i] = reg(method::k_viewport_offset + 4 * i);
+    }
+    request.area = drawing_area();
+    const auto target = color_surface();
+    if (!target) return;
+    request.target = *target;
+    request.color_mask = reg(method::k_color_mask);
+    request.flat_shading = reg(method::k_shade_mode) == method::k_shade_flat;
+
+    if (backend_) {
+        if (auto error = backend_->draw(request)) fail(std::move(*error));
+    }
 }
 
 // ---- Display ----

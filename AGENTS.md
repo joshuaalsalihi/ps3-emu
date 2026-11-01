@@ -53,7 +53,9 @@ cleverer or faster one.
 This project is clean-room and 0BSD-licensed.
 
 - **Allowed:** public hardware manuals and ISA specs, behavior descriptions on public wikis
-  (e.g. psdevwiki), SDK headers for ABI facts and constants, and observing other programs' output.
+  (e.g. psdevwiki), SDK headers for ABI facts and constants, open-source GPU driver headers for
+  hardware register and encoding facts (e.g. nouveau's NV30/NV40 headers in Mesa), and observing
+  other programs' output.
 - **Not allowed:** reading, copying, translating or paraphrasing source code from other PS3
   emulators (e.g. RPCS3) or from proprietary/leaked SDKs. Do not search for or open such code.
 - Never commit firmware, keys, game files or other copyrighted material.

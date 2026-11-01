@@ -5,8 +5,12 @@
 // renders elsewhere (the GPU) must write its results back before anyone reads them.
 
 #include "common/types.h"
+#include "rsx/fragment_program.h"
+#include "rsx/vertex_program.h"
 
+#include <array>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace rsx {
@@ -52,6 +56,31 @@ struct ClearRequest {
     u32 depth_value = 0; // Z16 in the low 16 bits, or Z24 << 8 | S8
 };
 
+// A vertex array: where one input attribute of each vertex comes from.
+struct VertexInput {
+    u32 address = 0; // guest address of the first vertex's attribute
+    u32 type = 0;    // method::k_vertex_float or k_vertex_ubyte
+    u32 size = 0;    // components, 1-4; the rest default to 0, 0, 0, 1
+    u32 stride = 0;  // bytes from one vertex to the next
+};
+
+enum class Primitive { triangles, triangle_strip, triangle_fan };
+
+// Draws primitives into one color surface, with no depth test or blending (yet).
+struct DrawRequest {
+    Primitive primitive = Primitive::triangles;
+    std::vector<u32> vertices; // vertex indices, in the order they make primitives
+    std::array<std::optional<VertexInput>, vertex::k_input_count> inputs;
+    vertex::Program vertex_program;
+    fragment::Program fragment_program;
+    Vec4 viewport_scale{}; // window = clip / w * scale + offset
+    Vec4 viewport_offset{};
+    Rect area; // pixels that may change: the surface clipped by the scissor
+    ColorSurface target;
+    u32 color_mask = 0; // method::k_color_mask
+    bool flat_shading = false;
+};
+
 // A frame as it reaches the display: 8-bit RGB, top row first.
 struct Frame {
     u64 number = 0; // counting from 1
@@ -64,6 +93,8 @@ class Backend {
 public:
     virtual ~Backend() = default;
     virtual void clear(const ClearRequest& request) = 0;
+    // Returns an error if the draw needs something the backend doesn't support yet.
+    virtual std::optional<std::string> draw(const DrawRequest& request) = 0;
     // Writes everything rendered so far back to guest memory.
     virtual void flush() {}
 };

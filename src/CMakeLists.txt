@@ -33,6 +33,7 @@ add_library(ps3emu_core STATIC
     cpu/spu/shift_rotate.cpp
     cpu/spu/spe.cpp
     cpu/spu/spu_float.cpp
+    gpu/rasterizer.cpp
     gpu/reference_backend.cpp
     hle/cell_gcm_sys.cpp
     hle/cell_sysutil.cpp
@@ -57,7 +58,10 @@ add_library(ps3emu_core STATIC
     lv2/sys_sync.cpp
     lv2/sys_time.cpp
     lv2/sys_tty.cpp
+    rsx/fragment_program.cpp
     rsx/rsx.cpp
+    rsx/shader_float.cpp
+    rsx/vertex_program.cpp
     platform/host_memory_posix.cpp
 )
 target_include_directories(ps3emu_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

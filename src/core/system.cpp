@@ -85,6 +85,7 @@ RunResult System::run(const RunOptions& options) {
                          ? static_cast<rsx::Backend*>(&reference_backend_)
                          : &null_backend_);
     rsx_.on_frame = options.on_frame;
+    rsx_.trace = options.trace;
 
     while (true) {
         if (const auto status = kernel_.exit_status()) {

@@ -39,15 +39,48 @@ constexpr u32 k_surface_pitch_c = 0x0280;
 constexpr u32 k_surface_pitch_d = 0x0284;
 constexpr u32 k_surface_color_offset_c = 0x0288;
 constexpr u32 k_surface_color_offset_d = 0x028c;
-constexpr u32 k_color_mask = 0x0324;          // A, R, G, B enables: bits 24, 16, 8, 0
-constexpr u32 k_scissor_horizontal = 0x08c0;  // x | width << 16
-constexpr u32 k_scissor_vertical = 0x08c4;    // y | height << 16
+constexpr u32 k_alpha_test_enable = 0x0304;
+constexpr u32 k_blend_enable = 0x0310;
+constexpr u32 k_color_mask = 0x0324; // A, R, G, B enables: bits 24, 16, 8, 0
+constexpr u32 k_stencil_test_enable = 0x0348;
+constexpr u32 k_shade_mode = 0x0368; // see k_shade_*
+constexpr u32 k_logic_op_enable = 0x0374;
+constexpr u32 k_scissor_horizontal = 0x08c0; // x | width << 16
+constexpr u32 k_scissor_vertical = 0x08c4;   // y | height << 16
+constexpr u32 k_shader_program = 0x08e4;     // fragment program offset | location (1 local, 2 main)
+constexpr u32 k_viewport_offset = 0x0a20;    // 4 floats: x, y, z, w
+constexpr u32 k_viewport_scale = 0x0a30;     // 4 floats
+constexpr u32 k_depth_write_enable = 0x0a70;
+constexpr u32 k_depth_test_enable = 0x0a74;
+constexpr u32 k_transform_program = 0x0b80;        // 32 words: the next words of the vertex program
+constexpr u32 k_vertex_data_array_offset = 0x1680; // 16 of: offset | location << 31 (1 main)
+constexpr u32 k_vertex_data_array_format = 0x1740; // 16 of: type | size << 4 | stride << 8
+constexpr u32 k_begin_end = 0x1808;                // a primitive type, or 0 to end
+constexpr u32 k_draw_arrays = 0x1814;              // first | (count - 1) << 24
+constexpr u32 k_cull_face_enable = 0x183c;
 constexpr u32 k_semaphore_offset_3d = 0x1d6c; // the 3D class's own label writes
 constexpr u32 k_back_end_write_semaphore_release = 0x1d70;
 constexpr u32 k_texture_read_semaphore_release = 0x1d74;
-constexpr u32 k_zstencil_clear_value = 0x1d8c; // Z16, or Z24 << 8 | S8
-constexpr u32 k_color_clear_value = 0x1d90;    // A8R8G8B8
-constexpr u32 k_clear_surface = 0x1d94;        // which buffers to clear: see k_clear_*
+constexpr u32 k_zstencil_clear_value = 0x1d8c;    // Z16, or Z24 << 8 | S8
+constexpr u32 k_color_clear_value = 0x1d90;       // A8R8G8B8
+constexpr u32 k_clear_surface = 0x1d94;           // which buffers to clear: see k_clear_*
+constexpr u32 k_transform_program_load = 0x1e9c;  // where the next vertex program words go
+constexpr u32 k_transform_program_start = 0x1ea0; // where the vertex program starts
+constexpr u32 k_transform_constant_load = 0x1efc; // where the next constants go
+constexpr u32 k_transform_constant = 0x1f00;      // 32 words: the next constants' components
+
+// k_shade_mode values.
+constexpr u32 k_shade_flat = 0x1d00;
+constexpr u32 k_shade_smooth = 0x1d01;
+
+// Vertex attribute types (k_vertex_data_array_format bits 0-3).
+constexpr u32 k_vertex_float = 2;
+constexpr u32 k_vertex_ubyte = 4; // unsigned bytes, normalized to 0..1
+
+// k_begin_end values. PSL1GHT, rsx/gcm_sys.h: GCM_TYPE_*.
+constexpr u32 k_triangles = 5;
+constexpr u32 k_triangle_strip = 6;
+constexpr u32 k_triangle_fan = 7;
 
 // k_clear_surface bits. PSL1GHT, rsx/gcm_sys.h: GCM_CLEAR_*.
 constexpr u32 k_clear_depth = 0x01;
