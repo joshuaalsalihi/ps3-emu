@@ -3,9 +3,12 @@
 #include "common/types.h"
 #include "core/clock.h"
 #include "core/memory.h"
+#include "gpu/reference_backend.h"
 #include "hle/linker.h"
 #include "lv2/kernel.h"
+#include "rsx/rsx.h"
 
+#include <functional>
 #include <iosfwd>
 #include <limits>
 #include <span>
@@ -15,6 +18,10 @@ struct RunOptions {
     u64 max_instructions = std::numeric_limits<u64>::max();
     std::ostream* trace = nullptr; // if set, every instruction and call is printed here
     bool instant_dma = false;      // SPU DMA completes the moment it is issued (for debugging)
+
+    enum class Gpu { reference, null };
+    Gpu gpu = Gpu::reference;
+    std::function<void(const rsx::Frame&)> on_frame = {}; // called with each frame displayed
 };
 
 struct RunResult {
@@ -46,6 +53,7 @@ public:
     Memory& memory() { return memory_; }
     lv2::Kernel& kernel() { return kernel_; }
     lv2::PpuThread& main_thread() { return *kernel_.threads().front(); }
+    rsx::Rsx& rsx() { return rsx_; }
     const VirtualClock& clock() const { return clock_; }
 
 private:
@@ -57,4 +65,7 @@ private:
     Memory memory_;
     lv2::Kernel kernel_;
     hle::Linker linker_;
+    rsx::Rsx rsx_;
+    gpu::ReferenceBackend reference_backend_;
+    gpu::NullBackend null_backend_;
 };

@@ -19,6 +19,10 @@
 #include <string_view>
 #include <vector>
 
+namespace rsx {
+class Rsx;
+}
+
 namespace lv2 {
 
 class Kernel;
@@ -88,6 +92,7 @@ public:
     Memory& memory;
     VirtualClock& clock;
     std::ostream& tty;
+    rsx::Rsx* rsx = nullptr; // the GPU, which libgcm's HLE functions drive
 
     // ---- Syscalls ----
 
@@ -134,9 +139,10 @@ public:
 
     // Ends waits whose timeout has passed.
     void wake_timed_out_threads();
-    // When no thread is ready, moves the clock forward to the next timeout. Returns false if no
-    // thread is waiting with a timeout.
-    bool skip_to_next_timeout();
+    // When no thread is ready, moves the clock forward to the next timeout, or to `device_deadline`
+    // (a device's next event, such as a vblank) if that is sooner. Returns false if there is
+    // neither.
+    bool skip_to_next_timeout(std::optional<u64> device_deadline = std::nullopt);
     // One line per waiting thread, for deadlock reports.
     std::string describe_waits() const;
 

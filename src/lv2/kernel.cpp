@@ -275,9 +275,10 @@ void Kernel::wake_timed_out_threads() {
     }
 }
 
-bool Kernel::skip_to_next_timeout() {
+bool Kernel::skip_to_next_timeout(std::optional<u64> device_deadline) {
     std::optional<u64> next;
     auto consider = [&](u64 deadline) { next = std::min(next.value_or(deadline), deadline); };
+    if (device_deadline) consider(*device_deadline);
     for (const auto& thread : threads_) {
         if (thread->status == ThreadStatus::waiting && thread->wait.deadline) {
             consider(*thread->wait.deadline);

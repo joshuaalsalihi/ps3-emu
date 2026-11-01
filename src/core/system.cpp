@@ -37,7 +37,10 @@ std::string describe_unknown_spu_stop(u32 signal) {
 
 } // namespace
 
-System::System(std::ostream& tty) : kernel_(memory_, clock_, tty) {}
+System::System(std::ostream& tty)
+    : kernel_(memory_, clock_, tty), rsx_(memory_, clock_), reference_backend_(memory_) {
+    kernel_.rsx = &rsx_;
+}
 
 void System::load(std::span<const u8> elf_file) {
     const loader::ElfFile elf = loader::parse_elf(elf_file);
@@ -78,6 +81,10 @@ RunResult System::run(const RunOptions& options) {
     const lv2::PpuThread* previous = nullptr;
     const lv2::SpuThread* previous_spu = nullptr;
     kernel_.instant_dma = options.instant_dma;
+    rsx_.set_backend(options.gpu == RunOptions::Gpu::reference
+                         ? static_cast<rsx::Backend*>(&reference_backend_)
+                         : &null_backend_);
+    rsx_.on_frame = options.on_frame;
 
     while (true) {
         if (const auto status = kernel_.exit_status()) {
@@ -92,10 +99,17 @@ RunResult System::run(const RunOptions& options) {
 
         kernel_.update_spu_threads();
         kernel_.wake_timed_out_threads();
+        rsx_.run();
+        if (const auto& error = rsx_.error()) {
+            result.outcome = RunResult::Outcome::faulted;
+            result.message = *error;
+            return result;
+        }
         const lv2::Runnable next = kernel_.next_thread();
         if (!next) {
-            // Nothing can run: let time pass until a timeout, or report how the run ended.
-            if (kernel_.skip_to_next_timeout()) continue;
+            // Nothing can run: let the RSX work or time pass, or report how the run ended.
+            if (rsx_.has_work()) continue;
+            if (kernel_.skip_to_next_timeout(rsx_.next_deadline())) continue;
             if (kernel_.all_threads_finished()) {
                 // UNVERIFIED: the exit status when the process ends because its threads did.
                 result.outcome = RunResult::Outcome::exited;
@@ -103,6 +117,9 @@ RunResult System::run(const RunOptions& options) {
             }
             result.outcome = RunResult::Outcome::deadlocked;
             result.message = "every thread is waiting:" + kernel_.describe_waits();
+            if (const std::string rsx_wait = rsx_.describe_wait(); !rsx_wait.empty()) {
+                result.message += "\n  " + rsx_wait;
+            }
             return result;
         }
 

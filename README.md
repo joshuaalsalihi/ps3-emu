@@ -20,6 +20,9 @@ multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floa
   time, so programs that forget to wait for it misbehave as they would on hardware.
 - **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
   with deterministic thread scheduling on a virtual clock.
+- **RSX (in progress):** the GPU's command FIFO and register state, display setup through
+  libgcm, clears and flips. A software reference renderer produces exact, host-independent
+  frames, which can be saved as PNGs or checked by hash.
 
 See the [spec](docs/SPEC.md) for the architecture and roadmap.
 
@@ -95,6 +98,9 @@ $ ./build/src/ps3emu run --trace build/examples/hello.elf
 | `--trace` | Prints every instruction, syscall, library call and thread switch (to stderr). |
 | `--max-instructions N` | Stops after N instructions. |
 | `--instant-dma` | Makes SPU DMA complete instantly, to tell timing bugs from logic bugs. |
+| `--frames FILE` | Writes the size and SHA-1 of each frame the program displays to FILE. |
+| `--dump-frames DIR` | Saves each displayed frame as a PNG in DIR. |
+| `--gpu reference\|null` | Renders in software (the default), or not at all. |
 | `ps3emu info <file.elf>` | Prints the ELF header and segment table. |
 
 ## Legal
