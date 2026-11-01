@@ -5,6 +5,9 @@
 #include "cpu/ppu/interpreter.h"
 #include "cpu/spu/disassembler.h"
 #include "cpu/spu/spe.h"
+#ifdef PS3EMU_HAS_METAL
+#include "gpu/metal_backend.h"
+#endif
 #include "loader/elf.h"
 #include "loader/process_info.h"
 #include "loader/program.h"
@@ -81,9 +84,11 @@ RunResult System::run(const RunOptions& options) {
     const lv2::PpuThread* previous = nullptr;
     const lv2::SpuThread* previous_spu = nullptr;
     kernel_.instant_dma = options.instant_dma;
-    rsx_.set_backend(options.gpu == RunOptions::Gpu::reference
-                         ? static_cast<rsx::Backend*>(&reference_backend_)
-                         : &null_backend_);
+    if (const auto error = select_gpu(options.gpu)) {
+        result.outcome = RunResult::Outcome::faulted;
+        result.message = *error;
+        return result;
+    }
     rsx_.on_frame = options.on_frame;
     rsx_.trace = options.trace;
 
@@ -154,6 +159,27 @@ RunResult System::run(const RunOptions& options) {
             return result;
         }
     }
+}
+
+// Points the RSX at the chosen backend. Returns an error if it isn't available here.
+std::optional<std::string> System::select_gpu(RunOptions::Gpu gpu) {
+    switch (gpu) {
+    case RunOptions::Gpu::reference: rsx_.set_backend(&reference_backend_); return std::nullopt;
+    case RunOptions::Gpu::null: rsx_.set_backend(&null_backend_); return std::nullopt;
+    case RunOptions::Gpu::metal:
+#ifdef PS3EMU_HAS_METAL
+        if (!metal_backend_) {
+            std::string error;
+            metal_backend_ = gpu::MetalBackend::create(memory_, error);
+            if (!metal_backend_) return "Metal: " + error;
+        }
+        rsx_.set_backend(metal_backend_.get());
+        return std::nullopt;
+#else
+        return "the Metal backend is only available on macOS";
+#endif
+    }
+    return std::nullopt;
 }
 
 // Gives an SPU thread its turn. Returns false if the run must end with a fault.

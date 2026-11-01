@@ -1,6 +1,7 @@
 #include "gpu/reference_backend.h"
 
 #include "gpu/rasterizer.h"
+#include "gpu/vertex_input.h"
 #include "rsx/methods.h"
 #include "rsx/shader_ops.h"
 
@@ -86,73 +87,13 @@ constexpr Float k_half = 0x3f00'0000;
 // Window coordinates beyond this many subpixels would need clipping first.
 constexpr s64 k_max_subpixels = s64{1} << 24;
 
-// Which vertex output each fragment program input interpolates, if any.
-std::optional<u32> vertex_output_for(u32 input) {
-    using namespace rsx;
-    if (input == fragment::k_input_color0) return vertex::k_output_color0;
-    if (input == fragment::k_input_color1) return vertex::k_output_color1;
-    if (input == fragment::k_input_fog) return vertex::k_output_fog;
-    if (input >= fragment::k_input_texcoord0 && input < fragment::k_input_texcoord0 + 10) {
-        return vertex::k_output_texcoord0 + (input - fragment::k_input_texcoord0);
-    }
-    return std::nullopt;
-}
-
 struct ShadedVertex {
     std::array<Vec4, rsx::vertex::k_output_count> outputs;
     FixedPoint window;
     Float inverse_w = k_one;
 };
 
-// The three vertex positions in `vertices` that make each triangle of `primitive`.
-std::vector<std::array<std::size_t, 3>> assemble(rsx::Primitive primitive, std::size_t count) {
-    std::vector<std::array<std::size_t, 3>> triangles;
-    switch (primitive) {
-    case rsx::Primitive::triangles:
-        for (std::size_t i = 0; i + 2 < count; i += 3) {
-            triangles.push_back({i, i + 1, i + 2});
-        }
-        break;
-    case rsx::Primitive::triangle_strip:
-        // Every other triangle swaps its first two vertices, so all keep the same winding.
-        for (std::size_t i = 2; i < count; ++i) {
-            if (i % 2 == 0) {
-                triangles.push_back({i - 2, i - 1, i});
-            } else {
-                triangles.push_back({i - 1, i - 2, i});
-            }
-        }
-        break;
-    case rsx::Primitive::triangle_fan:
-        for (std::size_t i = 2; i < count; ++i) {
-            triangles.push_back({0, i - 1, i});
-        }
-        break;
-    }
-    return triangles;
-}
-
 } // namespace
-
-// Reads one vertex's inputs from its arrays; inputs without an array read 0, 0, 0, 1.
-std::array<Vec4, rsx::vertex::k_input_count>
-ReferenceBackend::fetch(const rsx::DrawRequest& request, u32 index) const {
-    std::array<Vec4, rsx::vertex::k_input_count> inputs;
-    for (u32 i = 0; i < inputs.size(); ++i) {
-        inputs[i] = {k_zero, k_zero, k_zero, k_one};
-        const auto& array = request.inputs[i];
-        if (!array) continue;
-        const u32 base = array->address + index * array->stride;
-        for (u32 c = 0; c < array->size; ++c) {
-            if (array->type == rsx::method::k_vertex_float) {
-                inputs[i][c] = memory_.read<u32>(base + 4 * c);
-            } else {
-                inputs[i][c] = divide(from_integer(memory_.read<u8>(base + c)), k_255);
-            }
-        }
-    }
-    return inputs;
-}
 
 std::optional<std::string> ReferenceBackend::draw(const rsx::DrawRequest& request) {
     // Shade each vertex once, then place it in window coordinates.
@@ -160,7 +101,7 @@ std::optional<std::string> ReferenceBackend::draw(const rsx::DrawRequest& reques
     for (const u32 index : request.vertices) {
         if (shaded.contains(index)) continue;
         const rsx::vertex::Result result =
-            rsx::vertex::run(request.vertex_program, fetch(request, index));
+            rsx::vertex::run(request.vertex_program, fetch_vertex(memory_, request, index));
         if (result.error) return result.error;
 
         ShadedVertex vertex;

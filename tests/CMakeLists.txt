@@ -35,6 +35,7 @@ add_executable(ps3emu_tests
     cpu/spu/load_store_test.cpp
     cpu/spu/shift_rotate_test.cpp
     cpu/spu/spu_float_test.cpp
+    gpu/msl_test.cpp
     gpu/rasterizer_test.cpp
     hle/cell_gcm_sys_test.cpp
     hle/linker_test.cpp
@@ -59,6 +60,11 @@ set_source_files_properties(common/soft_float_test.cpp PROPERTIES COMPILE_OPTION
 
 target_include_directories(ps3emu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ps3emu_tests PRIVATE ps3emu_core Catch2::Catch2WithMain)
+
+# The Metal backend exists only on macOS.
+if(APPLE)
+    target_sources(ps3emu_tests PRIVATE gpu/metal_backend_test.cpp)
+endif()
 
 include(Catch)
 catch_discover_tests(ps3emu_tests)

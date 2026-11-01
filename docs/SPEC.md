@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.10 · 2026-11-01 · M5 in progress: the RSX draws triangles
+**Status:** Draft v0.11 · 2026-11-01 · M5 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -341,6 +341,14 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   every host, so its frames are the golden images, checked in CI), `Null` (renders nothing),
   `Metal` (first GPU backend, checked against the reference with a small per-pixel tolerance),
   `Vulkan` (later).
+- **Metal backend** (macOS, Objective-C++ against the system framework): shaders are translated
+  from the IR to Metal Shading Language and compiled at run time, cached per program. For each
+  draw the render target is uploaded from guest memory into a texture, drawn into with the
+  scissor and color mask, and written back, so guest memory always holds the result; keeping
+  surfaces on the GPU comes later. The vertex function applies the RSX viewport transform
+  itself. Metal shades flat triangles from their first vertex, so the backend rotates them to
+  match the reference's last-vertex rule. Clears are memory fills, shared with the reference.
+  On the test machine the PSL1GHT triangle's frame is bit-identical to the reference.
 
 ---
 
@@ -424,7 +432,7 @@ docs/          this spec and notes
 ```
 
 C++20 · clang · CMake + Ninja · Catch2 · clang-format. Few dependencies: `std::format` instead of
-a formatting library, metal-cpp for graphics, LLVM only if a JIT is added. Debug builds use
+a formatting library, the system Metal framework (from Objective-C++), LLVM only if a JIT is added. Debug builds use
 ASan/UBSan.
 
 ---
@@ -438,7 +446,7 @@ ASan/UBSan.
 | M2 ✅ | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
 | M3 ✅ | PPU float + vector | FPU and VMX tests pass, including flags. |
 | M4 ✅ | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
-| M5 | First pixels | FIFO + state model; the reference backend draws a PSL1GHT triangle matching its golden hash, and Metal draws it within tolerance of the reference. |
+| M5 ✅ | First pixels | FIFO + state model; the reference backend draws a PSL1GHT triangle matching its golden hash, and Metal draws it within tolerance of the reference. |
 | M6 | Debugging | GDB server, trace diff, save states, replay. |
 | M7 | Shaders + textures | Homebrew 3D samples render correctly. |
 | M8 | Firmware | Fake-signed SELF, LLE libraries from user firmware, `/dev_flash`. |

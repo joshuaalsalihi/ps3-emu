@@ -23,7 +23,7 @@ using shader_float::Vec4;
 namespace vertex {
 
 constexpr u32 k_input_count = 16;
-constexpr u32 k_output_count = 16; // position, colors, fog, point size, texture coordinates
+constexpr u32 k_output_count = 17; // position, colors, fog, point size, texture coordinates 0-9
 constexpr u32 k_temp_count = 32;
 constexpr u32 k_constant_count = 512; // UNVERIFIED: the RSX's constant memory size
 constexpr u32 k_instruction_slots = 512;

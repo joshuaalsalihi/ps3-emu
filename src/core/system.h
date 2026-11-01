@@ -11,6 +11,8 @@
 #include <functional>
 #include <iosfwd>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -19,7 +21,8 @@ struct RunOptions {
     std::ostream* trace = nullptr; // if set, every instruction and call is printed here
     bool instant_dma = false;      // SPU DMA completes the moment it is issued (for debugging)
 
-    enum class Gpu { reference, null };
+    enum class Gpu { reference, null, metal }; // metal: macOS only
+
     Gpu gpu = Gpu::reference;
     std::function<void(const rsx::Frame&)> on_frame = {}; // called with each frame displayed
 };
@@ -59,6 +62,7 @@ public:
 private:
     // Handles whatever stopped `thread`. Returns false if the run must end with a fault.
     bool handle_stop(lv2::PpuThread& thread, std::ostream* trace);
+    std::optional<std::string> select_gpu(RunOptions::Gpu gpu);
     bool run_spu_thread(lv2::SpuThread& thread, u64 budget, std::ostream* trace, RunResult& result);
 
     VirtualClock clock_;
@@ -68,4 +72,5 @@ private:
     rsx::Rsx rsx_;
     gpu::ReferenceBackend reference_backend_;
     gpu::NullBackend null_backend_;
+    std::unique_ptr<rsx::Backend> metal_backend_; // created when first asked for
 };

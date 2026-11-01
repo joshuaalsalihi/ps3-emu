@@ -17,8 +17,6 @@ public:
     std::optional<std::string> draw(const rsx::DrawRequest& request) override;
 
 private:
-    std::array<rsx::Vec4, rsx::vertex::k_input_count> fetch(const rsx::DrawRequest& request,
-                                                            u32 index) const;
     void write_pixel(const rsx::DrawRequest& request, u32 x, u32 y, const rsx::Vec4& color);
 
     Memory& memory_;

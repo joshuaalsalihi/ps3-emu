@@ -5,10 +5,11 @@ Seeing if giving Anthropic $20/month is enough to fulfill a childhood dream.
 An accuracy-focused PlayStation 3 emulator, built for research, homebrew development and learning
 how the Cell processor works.
 
-**Status:** milestone M4 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
+**Status:** milestone M5 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
 multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included),
-`malloc`, and SPU threads that talk to the PPU through mailboxes, DMA, atomics and event queues
-(`spu_printf` included).
+`malloc`, SPU threads that talk to the PPU through mailboxes, DMA, atomics and event queues
+(`spu_printf` included), and graphics: the RSX clears the screen, draws shaded triangles and
+flips to the display.
 
 - **CPU:** the PS3's main core (the PPU) runs its full user instruction set: integer, branch,
   load/store, atomics, floating point (with every FPSCR flag) and the VMX vector unit, including
@@ -20,10 +21,10 @@ multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floa
   time, so programs that forget to wait for it misbehave as they would on hardware.
 - **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
   with deterministic thread scheduling on a virtual clock.
-- **RSX (in progress):** the GPU's command FIFO and register state, display setup through
-  libgcm, clears, flips, and triangles drawn with vertex and fragment programs. A software
-  reference renderer produces exact, host-independent frames, which can be saved as PNGs or
-  checked by hash.
+- **RSX:** the GPU's command FIFO and register state, display setup through libgcm, clears,
+  flips, and triangles drawn with vertex and fragment programs. A software reference renderer
+  produces exact, host-independent frames, which can be saved as PNGs or checked by hash; on
+  macOS, Metal draws the same frames on the GPU. Textures, depth and blending come next.
 
 See the [spec](docs/SPEC.md) for the architecture and roadmap.
 
@@ -101,7 +102,7 @@ $ ./build/src/ps3emu run --trace build/examples/hello.elf
 | `--instant-dma` | Makes SPU DMA complete instantly, to tell timing bugs from logic bugs. |
 | `--frames FILE` | Writes the size and SHA-1 of each frame the program displays to FILE. |
 | `--dump-frames DIR` | Saves each displayed frame as a PNG in DIR. |
-| `--gpu reference\|null` | Renders in software (the default), or not at all. |
+| `--gpu reference\|metal\|null` | Renders in software (the default), with Metal (macOS), or not at all. |
 | `ps3emu info <file.elf>` | Prints the ELF header and segment table. |
 
 ## Legal

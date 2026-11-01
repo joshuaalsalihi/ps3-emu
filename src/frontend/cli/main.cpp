@@ -23,7 +23,8 @@ constexpr std::string_view k_usage = R"(usage:
       --trace               print each instruction as it executes (to stderr)
       --max-instructions N  stop after N instructions
       --instant-dma         make SPU DMA complete instantly (for debugging)
-      --gpu reference|null  render in software (the default), or not at all
+      --gpu reference|metal|null
+                            render in software (the default), with Metal (macOS), or not at all
       --frames FILE         write each displayed frame's size and SHA-1 to FILE
       --dump-frames DIR     save each displayed frame as DIR/frame-0001.png, ...
 )";
@@ -154,6 +155,8 @@ int run_command(const std::vector<std::string_view>& args) {
             const std::string_view gpu = args[++i];
             if (gpu == "reference") {
                 options.gpu = RunOptions::Gpu::reference;
+            } else if (gpu == "metal") {
+                options.gpu = RunOptions::Gpu::metal;
             } else if (gpu == "null") {
                 options.gpu = RunOptions::Gpu::null;
             } else {

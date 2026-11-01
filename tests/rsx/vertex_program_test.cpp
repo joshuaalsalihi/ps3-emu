@@ -193,6 +193,20 @@ TEST_CASE("scalar operations read source 2's x and broadcast") {
     CHECK(result.outputs[1] == v(0, 0.25f, 0, 0));
 }
 
+TEST_CASE("the last texture coordinate output exists") {
+    // Texture coordinates 0-9 are outputs 7-16. Output 16 was once past the end of the array.
+    std::array<Vec4, k_input_count> inputs{};
+    inputs[0] = v(1, 2, 3, 4);
+    const Result result = run_program({{.vector_op = 0x01,
+                                        .sources = {source(SourceType::input), 0, 0},
+                                        .vector_to_output = true,
+                                        .vector_mask = k_xyzw,
+                                        .output = k_output_texcoord0 + 9}},
+                                      inputs);
+    REQUIRE(result.outputs.size() == 17);
+    CHECK(result.outputs[16] == v(1, 2, 3, 4));
+}
+
 TEST_CASE("an unsupported opcode is reported") {
     const Result result =
         run_program({{.vector_op = 0x0d, .sources = {source(SourceType::input), 0, 0}}}, {});
