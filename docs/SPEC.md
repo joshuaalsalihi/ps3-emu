@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.6 · 2026-10-31 · M3 complete; M4 in progress (SPU instruction set done)
+**Status:** Draft v0.7 · 2026-11-01 · M4 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -30,6 +30,8 @@ backward compatibility (PS1/PS2), or emulating the hypervisor.
 | **PPU** | The main CPU core. 64-bit PowerPC with VMX (AltiVec) vector instructions. |
 | **SPU** | A vector co-processor. Games get 6 of them. Each has its own 256 KB **local store** (LS). |
 | **MFC** | Each SPU's DMA engine. It moves data between local store and main memory. |
+| **SPE** | Synergistic Processor Element: an SPU together with its MFC. |
+| **Channel** | The SPU's I/O port to its MFC: mailboxes, signals, events, DMA commands. |
 | **RSX** | The GPU, an NVIDIA G70 derivative. The CPU drives it by writing commands to a **FIFO**. |
 | **LV2** | The PS3's operating-system kernel. Games call it through **syscalls**. |
 | **PRX** | A system library (like a DLL). Functions are identified by a 32-bit **NID** hash. |
@@ -60,7 +62,7 @@ backward compatibility (PS1/PS2), or emulating the hypervisor.
  System ── owns all emulator state; its run loop gives each runnable context a turn
    ├─ Memory ── guest address space, byte swapping, reservations
    ├─ LV2 kernel (HLE) ── syscalls, kernel objects, and PPU thread scheduling
-   │    └─ PPU threads (SPU threads and the RSX join the run loop later)
+   │    └─ PPU threads and SPU threads (the RSX joins the run loop later)
    ├─ HLE linker ── binds imported library functions to their HLE versions by NID
    ├─ VFS ── maps guest paths (/dev_hdd0, …) to host folders
    └─ Devices ── audio, controller input, timers
@@ -149,19 +151,33 @@ with soft_float so every host agrees.
   and illegal instructions stop with pc on it. Branch hints, `sync` and `dsync` change nothing
   in an interpreter that runs one instruction at a time. Interrupts aren't modeled yet; the
   branch bits that enable or disable them are only recorded.
-- **Channels:** mailboxes, signals, events, the decrementer and MFC commands. The interpreter
-  stops on `rdch`, `rchcnt` and `wrch` with pc on the instruction, so the channel code performs
-  them outside the instruction handlers. A channel access that would stall becomes a scheduler
-  wait.
-- **MFC:** DMA takes time per the timing model, so code that polls for completion behaves
-  realistically. An "instant DMA" debug option helps isolate bugs.
+- **Channels** (`spu::Channels`, CBEA chapter 9): every channel of Table 9-2, namely the
+  mailboxes (inbound four deep, outbound one each), both signal notification registers (overwrite
+  or OR mode), the event facility with all its edge-triggered events, the decrementer (counting
+  at the timebase rate), tag-group status, list stall-and-notify, atomic status and SRR0. The
+  interpreter stops on `rdch`, `rchcnt` and `wrch` with pc on the instruction; `spu::run`
+  performs them. Each channel has a count, as the CBEA defines it, and an access stalls exactly
+  when that count is 0. A stall leaves pc on the instruction and becomes a scheduler wait.
+- **MFC DMA** (`spu::Dma`, CBEA chapter 7): a 16-entry queue of gets, puts, lists (with
+  stall-and-notify), signals, barriers and cache hints. The engine runs one command at a time in
+  issue order, which satisfies every fence and barrier, and moves the data when a command
+  completes, so code that skips the wait sees stale data as on hardware. Each command costs 256
+  cycles plus 8 bytes per cycle (UNVERIFIED; see §15). `--instant-dma` makes every transfer
+  complete at once, to tell timing bugs from logic bugs. Sizes and alignments are checked as the
+  CBEA requires; a bad command stops the SPU with a clear message. DMA to other SPUs' local
+  stores (0xf0000000 and up) is not supported yet.
 
 ### 5.5 Atomics
 PPU (`lwarx`/`stwcx.`) and SPU (`getllar`/`putllc`) atomics share one mechanism:
 - `Memory` keeps a short list of active reservations, one per thread, each covering a 128-byte line.
 - Every write removes the reservations on the lines it touches.
 - A conditional store succeeds only if the thread's reservation is still there.
-- The same check will raise the SPU "reservation lost" event.
+- An SPU whose reservation disappears through someone else's write gets the "reservation lost"
+  event (its own stores don't raise it). `getllar`, `putllc` and `putlluc` run immediately,
+  outside the DMA queue; `putqlluc` is queued like a put.
+
+The `spu_threads` example checks this end to end: two SPUs and the PPU increment one counter
+thousands of times and must not lose an update.
 
 ### 5.6 JIT (later)
 Not planned for early milestones. When added, it must pass differential tests against the
@@ -172,8 +188,8 @@ interpreter. On macOS it needs `MAP_JIT` memory and the `allow-jit` entitlement.
 ## 6. Scheduling and timing
 
 **Deterministic mode (default):**
-- One host thread runs all guest contexts round-robin. Today that means PPU threads; SPU threads
-  and the RSX will join the same loop.
+- One host thread runs all guest contexts round-robin: PPU threads and SPU threads today; the
+  RSX will join the same loop.
 - A **virtual clock** counts guest cycles. The timebase, sleeps, timeouts and
   `sys_time_get_current_time` all come from it, never from the host clock.
 
@@ -187,6 +203,16 @@ interpreter. On macOS it needs `MAP_JIT` memory and the `allow-jit` entitlement.
   deadline. If none exists, the run ends as a **deadlock**, listing what each thread waits on.
 - Simplification (UNVERIFIED): priorities only decide wake-up order. They don't preempt, so a
   busy-waiting thread can't starve the others.
+
+**SPU threads (implemented in M4):**
+- They take turns with the PPU threads: one rotation covers the PPU threads in creation order,
+  then the SPU threads. Each turn lasts 1,000 instructions or until the SPU stops or stalls.
+- A stalled SPU thread waits until its channel's count is no longer 0. Before each turn, the
+  kernel lets every SPU's DMA progress and wakes the threads that can continue.
+- A wait on DMA or the decrementer is a timeout like any other: when every thread is waiting, the
+  clock jumps to the next DMA completion. Waits on mailboxes and signals have no deadline, so a
+  program that never sends one deadlocks, and the report names the SPU's channel.
+- Every SPU's actions advance the same virtual clock as the PPU's.
 
 **Timing levels:**
 
@@ -222,6 +248,14 @@ A multi-threaded mode for speed may come later. It will not support replay or tr
   pointing 0x7000 bytes past its start (the 64-bit PowerPC ELF convention).
 - **Kernel objects** (threads, mutexes, semaphores, event queues, SPU thread groups, …) live in one
   serializable ID table.
+- **SPU threads:** a program imports an SPU ELF it embeds (`sys_spu_image_import`), creates an
+  SPU thread group, initializes each thread with the image and four arguments (in `$3`-`$6`),
+  and starts the group. A thread ends with `stop 0x102` and a group with `stop 0x101`, each with
+  its status in the outbound mailbox (PSL1GHT's `spu_thread_exit` and `spu_thread_group_exit`);
+  `sys_spu_thread_group_join` reports how the group ended. A group can be started again, from a
+  fresh copy of its images. The PPU reaches its SPUs through mailbox, signal and local store
+  syscalls. Not implemented yet: raw SPUs, SPU thread event ports and queues (which
+  `spu_printf` uses), and other stop codes, which end the run with a clear fault.
 - **Executable formats**, in order: ELF → fake-signed SELF (PSL1GHT output) → retail SELF/SPRX using
   keys derived from user-supplied firmware. Decryption lives in an optional `crypto/` module.
 - **VFS** maps `/dev_hdd0`, `/dev_bdvd`, `/app_home`, `/dev_flash`, etc. to host folders, using PS3
@@ -290,8 +324,8 @@ everything above.
 **Test suites:**
 - Instruction unit tests: inputs → expected outputs and flags, for every instruction.
 - Example programs (`examples/`): small guest programs built with LLVM, whose output must match a
-  `.expected` file exactly. Later, PSL1GHT programs (threads, SPU mailboxes, DMA, a triangle, an
-  audio tone) with known-good logs and framebuffer hashes.
+  `.expected` file exactly, and PSL1GHT programs (threads, floats, SPU threads with mailboxes,
+  DMA and atomics). Later: a triangle and an audio tone, with framebuffer and audio hashes.
 - Determinism tests: two runs must produce identical state hashes.
 - CI runs everything headless, using the `Null` GPU backend.
 
@@ -358,7 +392,7 @@ ASan/UBSan.
 | M1 ✅ | PPU integer core | Integer/branch/load-store/atomic tests pass; compiled C programs run and print. |
 | M2 ✅ | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
 | M3 ✅ | PPU float + vector | FPU and VMX tests pass, including flags. |
-| M4 | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
+| M4 ✅ | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
 | M5 | First pixels | FIFO + state model; Metal draws a PSL1GHT triangle matching its golden hash. |
 | M6 | Debugging | GDB server, trace diff, save states, replay. |
 | M7 | Shaders + textures | Homebrew 3D samples render correctly. |
@@ -369,8 +403,9 @@ ASan/UBSan.
 
 ## 15. Open questions
 
-1. The time slice is 1,000 instructions for now. Revisit when SPUs join the run loop, since code
-   that polls for DMA completion may need finer interleaving.
+1. The time slice is 1,000 instructions, for SPU threads too. Code that polls another processor
+   (rather than waiting on a channel) only sees progress at turn boundaries; finer interleaving
+   may be needed for some programs.
 2. Can a copy of IBM systemsim be obtained legally?
 3. The initial register state LV2 gives a new process (beyond r1, r2, r13 and pc) is unverified.
 4. Real LV2 thread scheduling: how priorities preempt, and the length of a time slice.
@@ -383,6 +418,13 @@ ASan/UBSan.
 9. SPU details the ISA leaves to the implementation: the `frest`/`frsqest` tables, whether the
    Cell's SPU flushes double-precision denormals and propagates NaNs, whether it has the
    optional v1.2 instructions, which SPRs exist, and the signal type `stopd` reports.
+10. Real MFC timing: DMA latency and bandwidth under load (we use 256 cycles plus 8 bytes per
+    cycle, one command at a time), and how quickly the immediate atomic commands complete.
+11. LV2's SPU behavior where we had to choose: a full inbound mailbox makes
+    `sys_spu_thread_write_spu_mb` return EBUSY; an exit with an empty outbound mailbox has
+    status 0; a group whose threads all exit reports status 0; the priority range is 16-255; the
+    decrementer reads 0 until first written; and the registers a new SPU thread starts with
+    (beyond pc, `$1` and `$3`-`$6`).
 
 ---
 
@@ -391,8 +433,8 @@ ASan/UBSan.
 - *Power ISA* v3.1C (OpenPOWER Foundation): the floating-point and vector chapters, with
   pseudocode for every instruction. The classic instructions are unchanged since v2.02.
 - *Cell Broadband Engine Programming Handbook* v1.11 (2008): PPE specifics, graphics rounding mode
-- *Cell Broadband Engine Architecture* v1.02; *Synergistic Processor Unit Instruction Set
-  Architecture* v1.2 (2007); *SPU Language Extensions*
+- *Cell Broadband Engine Architecture* v1.01 (2006): SPU channels, the MFC and its commands
+- *Synergistic Processor Unit Instruction Set Architecture* v1.2 (2007); *SPU Language Extensions*
 - psdevwiki.com (PS3): syscalls, file formats, RSX
 - PSL1GHT: SDK headers and samples, for building test programs
 - envytools: public NVIDIA hardware documentation for NV40/G70 commands

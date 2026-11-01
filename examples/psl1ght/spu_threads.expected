@@ -1,0 +1,4 @@
+group ended: cause 2
+spu 0: exit status 100, sum x 3 = 31344
+spu 1: exit status 101, sum x 5 = 374800
+counter: 3000

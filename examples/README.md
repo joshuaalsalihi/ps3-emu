@@ -20,9 +20,11 @@ The `psl1ght/` directory holds real PS3 homebrew, written against the
 | `psl1ght/hello.c` | `printf` through newlib, PSL1GHT's runtime, imported system library calls and LV2. |
 | `psl1ght/threads.c` | Threads, lightweight mutexes and condition variables, semaphores, join and sleep. |
 | `psl1ght/floats.c` | `printf` of doubles (to hundreds of digits) and square roots, compared with a native run. |
+| `psl1ght/spu_threads.c` | Two SPU threads (`spu_threads_spu.c`, built with `spu-gcc`): mailboxes, DMA gets and puts, and an atomic counter shared with the PPU. |
 
 Only the main thread prints, after its workers finish, so the expected output holds no matter how
-the threads interleave. The toolchain runs in Docker: build its image once with
+the threads interleave. A program with a `<name>_spu.c` gets it compiled for the SPU and embedded
+as the array `<name>_spu_elf`. The toolchain runs in Docker: build its image once with
 `tools/build-psl1ght-image.sh`, then re-run CMake.
 
 Build them with the rest of the project, then run one:

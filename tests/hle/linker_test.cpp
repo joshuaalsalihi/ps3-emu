@@ -5,6 +5,7 @@
 
 #include "support/import_builder.h"
 #include "support/kernel_test.h"
+#include "support/spu_elf_builder.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -46,9 +47,10 @@ struct LinkerTest : KernelTest {
     }
 
     static constexpr std::string_view k_names[] = {
-        "sys_lwmutex_create", "sys_lwmutex_lock",      "sys_lwmutex_unlock",
-        "sys_lwcond_create",  "sys_lwcond_wait",       "sys_lwcond_signal",
-        "sys_spinlock_lock",  "sys_ppu_thread_get_id", "sys_process_exit",
+        "sys_lwmutex_create",   "sys_lwmutex_lock",      "sys_lwmutex_unlock",
+        "sys_lwcond_create",    "sys_lwcond_wait",       "sys_lwcond_signal",
+        "sys_spinlock_lock",    "sys_ppu_thread_get_id", "sys_process_exit",
+        "sys_spu_image_import", "sys_spu_image_close",
     };
     enum Index {
         lwmutex_create,
@@ -60,6 +62,8 @@ struct LinkerTest : KernelTest {
         spinlock_lock,
         thread_get_id,
         process_exit,
+        spu_image_import,
+        spu_image_close,
         unknown
     };
 
@@ -152,4 +156,36 @@ TEST_CASE_METHOD(LinkerTest, "thread ID and process exit") {
 
     call(thread, process_exit, {3});
     CHECK(kernel.exit_status() == 3);
+}
+
+TEST_CASE_METHOD(LinkerTest, "an imported SPU image lists copy and fill segments") {
+    constexpr u64 elf = KernelTest::k_data + 0x100;
+    constexpr u64 image = KernelTest::k_data + 0x40;
+    const std::vector<u8> file = test::make_spu_elf({{0x0, {1, 2, 3, 4, 5, 6, 7, 8}, 0x20}}, 0x4);
+    memory.write_bytes(elf, file);
+    PpuThread& thread = new_thread();
+
+    call(thread, spu_image_import, {image, elf, 0});
+    REQUIRE(result(thread) == k_ok);
+    CHECK(memory.read<u32>(image + 4) == 0x4); // entry point
+    CHECK(memory.read<u32>(image + 12) == 2);  // segment count
+    const u32 table = memory.read<u32>(image + 8);
+    // {type, local store address, size, source or fill value}
+    CHECK(memory.read<u32>(table) == k_spu_segment_copy);
+    CHECK(memory.read<u32>(table + 8) == 8);
+    CHECK(memory.read<u32>(table + 12) == elf + 52 + 32); // the ELF's own bytes
+    CHECK(memory.read<u32>(table + 16) == k_spu_segment_fill);
+    CHECK(memory.read<u32>(table + 20) == 8);
+    CHECK(memory.read<u32>(table + 24) == 0x18);
+
+    call(thread, spu_image_close, {image});
+    CHECK(result(thread) == k_ok);
+    CHECK_FALSE(memory.is_accessible(table, 4, Memory::k_read));
+}
+
+TEST_CASE_METHOD(LinkerTest, "importing something that isn't an SPU program fails") {
+    PpuThread& thread = new_thread();
+    memory.write<u32>(KernelTest::k_data + 0x100, 0x1234'5678);
+    call(thread, spu_image_import, {KernelTest::k_data + 0x40, KernelTest::k_data + 0x100, 0});
+    CHECK(result(thread) == k_error_invalid);
 }

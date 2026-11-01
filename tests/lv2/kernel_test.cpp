@@ -120,16 +120,16 @@ TEST_CASE_METHOD(KernelTest, "ready threads take turns in creation order") {
     PpuThread& c = new_thread();
     kernel.wait(b, Wait::on(WaitKind::sleep), 0);
 
-    CHECK(kernel.next_thread() == &a);
-    CHECK(kernel.next_thread() == &c); // b waits; the stopped thread never runs
-    CHECK(kernel.next_thread() == &a);
+    CHECK(kernel.next_thread().ppu == &a);
+    CHECK(kernel.next_thread().ppu == &c); // b waits; the stopped thread never runs
+    CHECK(kernel.next_thread().ppu == &a);
     CHECK(stopped->status == ThreadStatus::stopped);
 }
 
 TEST_CASE_METHOD(KernelTest, "no thread is ready when all are waiting") {
     PpuThread& thread = new_thread();
     kernel.wait(thread, Wait::on(WaitKind::sleep), 0);
-    CHECK(kernel.next_thread() == nullptr);
+    CHECK_FALSE(kernel.next_thread());
     CHECK_FALSE(kernel.all_threads_finished());
     CHECK_FALSE(kernel.skip_to_next_timeout());
 }

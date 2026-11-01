@@ -3,6 +3,8 @@
 #include "cpu/ppu/disassembler.h"
 #include "cpu/ppu/instruction.h"
 #include "cpu/ppu/interpreter.h"
+#include "cpu/spu/disassembler.h"
+#include "cpu/spu/spe.h"
 #include "loader/elf.h"
 #include "loader/process_info.h"
 #include "loader/program.h"
@@ -63,6 +65,8 @@ void System::load(std::span<const u8> elf_file) {
 RunResult System::run(const RunOptions& options) {
     RunResult result;
     const lv2::PpuThread* previous = nullptr;
+    const lv2::SpuThread* previous_spu = nullptr;
+    kernel_.instant_dma = options.instant_dma;
 
     while (true) {
         if (const auto status = kernel_.exit_status()) {
@@ -75,9 +79,10 @@ RunResult System::run(const RunOptions& options) {
             return result;
         }
 
+        kernel_.update_spu_threads();
         kernel_.wake_timed_out_threads();
-        lv2::PpuThread* thread = kernel_.next_thread();
-        if (!thread) {
+        const lv2::Runnable next = kernel_.next_thread();
+        if (!next) {
             // Nothing can run: let time pass until a timeout, or report how the run ended.
             if (kernel_.skip_to_next_timeout()) continue;
             if (kernel_.all_threads_finished()) {
@@ -90,13 +95,27 @@ RunResult System::run(const RunOptions& options) {
             return result;
         }
 
+        const u64 budget =
+            std::min(lv2::Kernel::k_time_slice, options.max_instructions - result.instructions);
+
+        if (next.spu) {
+            if (options.trace && next.spu != previous_spu) {
+                *options.trace << std::format("--- SPU thread {:#x} \"{}\"\n", next.spu->id,
+                                              next.spu->name);
+            }
+            previous_spu = next.spu;
+            previous = nullptr;
+            if (!run_spu_thread(*next.spu, budget, options.trace, result)) return result;
+            continue;
+        }
+
+        lv2::PpuThread* thread = next.ppu;
         if (options.trace && thread != previous) {
             *options.trace << std::format("--- thread {:#x} \"{}\"\n", thread->id, thread->name);
         }
         previous = thread;
+        previous_spu = nullptr;
 
-        const u64 budget =
-            std::min(lv2::Kernel::k_time_slice, options.max_instructions - result.instructions);
         result.instructions += ppu::interpret(thread->cpu, budget, options.trace);
 
         if (thread->cpu.stop && !handle_stop(*thread, options.trace)) {
@@ -106,6 +125,35 @@ RunResult System::run(const RunOptions& options) {
             return result;
         }
     }
+}
+
+// Gives an SPU thread its turn. Returns false if the run must end with a fault.
+bool System::run_spu_thread(lv2::SpuThread& thread, u64 budget, std::ostream* trace,
+                            RunResult& result) {
+    const spu::SpeRun run = spu::run(*thread.spe, budget, trace);
+    result.instructions += run.instructions;
+
+    std::string fault;
+    switch (run.exit) {
+    case spu::SpeExit::budget: return true;
+    case spu::SpeExit::stalled: kernel_.block_spu_thread(thread, run.channel); return true;
+    case spu::SpeExit::stopped:
+        if (trace) *trace << std::format("    SPU stop {:#x}\n", run.signal);
+        if (kernel_.handle_spu_stop(thread, run.signal)) return true;
+        fault = std::format("stop {:#x}, which LV2 gives no meaning", run.signal);
+        break;
+    case spu::SpeExit::fault: fault = run.message; break;
+    }
+
+    // Show the instruction responsible: a stop has already moved pc past itself.
+    const spu::Thread& cpu = thread.spe->cpu;
+    const bool after = run.exit == spu::SpeExit::stopped;
+    const u32 pc = after ? (cpu.state.pc - 4) & spu::k_lslr : cpu.state.pc;
+    const u32 raw = cpu.local_store.read<u32>(pc);
+    result.outcome = RunResult::Outcome::faulted;
+    result.message = std::format("SPU thread {:#x} \"{}\": {} (pc {:#x}: {})", thread.id,
+                                 thread.name, fault, pc, spu::disassemble(raw, pc));
+    return false;
 }
 
 bool System::handle_stop(lv2::PpuThread& thread, std::ostream* trace) {

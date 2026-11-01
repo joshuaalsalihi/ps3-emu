@@ -3,6 +3,7 @@
 #include "core/system.h"
 
 #include "cpu/ppu/assembler.h"
+#include "cpu/spu/assembler.h"
 #include "hle/nid.h"
 #include "support/elf_builder.h"
 #include "support/import_builder.h"
@@ -258,4 +259,132 @@ TEST_CASE("runs are deterministic") {
         return std::make_pair(system.main_thread().cpu.state.gpr, system.clock().cycles());
     };
     CHECK(run_once() == run_once());
+}
+
+// ---- SPU threads ----
+
+namespace {
+
+// Data for a program with one SPU thread. Layout, from 0x20000:
+//   0x00 entry descriptor        0x10 group attributes (no name)   0x20 thread attributes
+//   0x30 sys_spu_image_t         0x40 one copy segment             0x80 group ID, thread ID
+//   0x88 join cause and status   0x90 a quadword the SPU writes    0x100 the SPU program
+std::vector<u8> spu_program_data(const std::vector<std::string_view>& spu_code) {
+    const std::vector<u32> spu_words = spu::assemble(spu_code, 0);
+    std::vector<u32> words(0x100 / 4, 0);
+    words[0] = static_cast<u32>(k_code);
+    words[0x30 / 4 + 2] = static_cast<u32>(k_data + 0x40); // image: segments
+    words[0x30 / 4 + 3] = 1;                               // image: segment count
+    words[0x40 / 4] = lv2::k_spu_segment_copy;
+    words[0x40 / 4 + 2] = static_cast<u32>(4 * spu_words.size());
+    words[0x40 / 4 + 3] = static_cast<u32>(k_data + 0x100);
+    words.insert(words.end(), spu_words.begin(), spu_words.end());
+    return test::words_to_bytes(words);
+}
+
+// Creates a one-thread group, starts it, mails the SPU 42, joins the group, then exits the
+// process with the first word the SPU wrote.
+const std::vector<std::string_view> k_run_spu_thread = {
+    "lis r9, 2",
+    "addi r3, r9, 0x80",
+    "li r4, 1",
+    "li r5, 100",
+    "addi r6, r9, 0x10",
+    "li r11, 170",
+    "sc",
+    "addi r3, r9, 0x84",
+    "lwz r4, 0x80(r9)",
+    "li r5, 0",
+    "addi r6, r9, 0x30",
+    "addi r7, r9, 0x20",
+    "li r8, 0",
+    "li r11, 172",
+    "sc",
+    "lwz r3, 0x80(r9)",
+    "li r11, 173",
+    "sc",
+    "lwz r3, 0x84(r9)",
+    "li r4, 42",
+    "li r11, 190",
+    "sc",
+    "lwz r3, 0x80(r9)",
+    "addi r4, r9, 0x88",
+    "addi r5, r9, 0x8c",
+    "li r11, 178",
+    "sc",
+    "lwz r3, 0x90(r9)",
+    "li r11, 3",
+    "sc",
+};
+
+// Reads the mailbox, adds 1, puts the quadword to 0x20090 by DMA, waits for it, and exits.
+const std::vector<std::string_view> k_spu_add_one = {
+    "rdch $3, $ch29",  "ai $3, $3, 1",    "stqa $3, 0x200", "il $10, 0x200",   "ilhu $11, 0x2",
+    "iohl $11, 0x90",  "il $12, 16",      "il $14, 0x20",   "wrch $ch16, $10", "wrch $ch18, $11",
+    "wrch $ch19, $12", "wrch $ch21, $14", "il $16, 1",      "il $17, 2",       "wrch $ch22, $16",
+    "wrch $ch23, $17", "rdch $5, $ch24",  "wrch $ch28, $3", "stop 0x102",
+};
+
+} // namespace
+
+TEST_CASE("a PPU thread runs an SPU thread and collects its result") {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data(k_spu_add_one)));
+
+    const RunResult result = system.run();
+    INFO(result.message);
+    CHECK(result.outcome == RunResult::Outcome::exited);
+    CHECK(result.exit_status == 43);
+    CHECK(system.memory().read<u32>(k_data + 0x88) == lv2::k_spu_join_all_threads_exit);
+    CHECK(system.kernel().spu_threads().front()->exit_status == 43);
+}
+
+TEST_CASE("SPU runs are deterministic, with or without instant DMA") {
+    auto run_once = [](bool instant) {
+        std::ostringstream tty;
+        System system(tty);
+        system.load(make_test_program(k_run_spu_thread, spu_program_data(k_spu_add_one)));
+        const RunResult result = system.run({.instant_dma = instant});
+        return std::make_pair(result.exit_status, system.clock().cycles());
+    };
+    CHECK(run_once(false) == run_once(false));
+    CHECK(run_once(true).first == run_once(false).first);
+    CHECK(run_once(true).second < run_once(false).second); // no waiting for the DMA
+}
+
+TEST_CASE("an SPU thread waiting on its mailbox forever is a deadlock") {
+    // The same program, but the SPU reads the mailbox twice.
+    std::vector<std::string_view> spu_code = k_spu_add_one;
+    spu_code.insert(spu_code.begin(), "rdch $4, $ch29");
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data(spu_code)));
+
+    const RunResult result = system.run();
+    CHECK(result.outcome == RunResult::Outcome::deadlocked);
+    CHECK_THAT(result.message, ContainsSubstring("waits on SPU thread group"));
+    CHECK_THAT(result.message, ContainsSubstring("waits on channel 29 (SPU_RdInMbox)"));
+}
+
+TEST_CASE("an SPU fault ends the run with the SPU's instruction") {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data({"heqi $0, 0"})));
+
+    const RunResult result = system.run();
+    CHECK(result.outcome == RunResult::Outcome::faulted);
+    CHECK_THAT(result.message, StartsWith("SPU thread 0x"));
+    CHECK_THAT(result.message, ContainsSubstring("halt instruction (pc 0x0: heqi $0, 0)"));
+}
+
+TEST_CASE("an SPU stop that LV2 doesn't know is a fault") {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data({"stop 0x2000"})));
+
+    const RunResult result = system.run();
+    CHECK(result.outcome == RunResult::Outcome::faulted);
+    CHECK_THAT(result.message,
+               ContainsSubstring("stop 0x2000, which LV2 gives no meaning (pc 0x0: stop 0x2000)"));
 }

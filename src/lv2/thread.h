@@ -17,14 +17,15 @@ enum class ThreadStatus {
 };
 
 // What a waiting thread is waiting for.
-enum class WaitKind { sleep, join, mutex, cond, semaphore };
+enum class WaitKind { sleep, join, mutex, cond, semaphore, spu_group };
 
 struct Wait {
     WaitKind kind = WaitKind::sleep;
-    u32 object = 0;              // the mutex, condition variable, semaphore or thread waited on
+    u32 object = 0;              // the mutex, condition variable, semaphore, thread or group
     u64 sequence = 0;            // arrival order, so waiters are woken first come, first served
     std::optional<u64> deadline; // virtual clock cycle at which the wait times out
-    u32 output_address = 0;      // join: where to store the joined thread's exit value
+    u32 output_address = 0;      // join: where to store the exit value (SPU: the cause)
+    u32 status_address = 0;      // SPU group join: where to store the exit status
 
     // A condition variable wait ends by locking its mutex again. These carry over to that phase.
     s32 result = 0;           // the result to report once the mutex is ours

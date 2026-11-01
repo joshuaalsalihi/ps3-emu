@@ -5,17 +5,18 @@ Seeing if giving Anthropic $20/month is enough to fulfill a childhood dream.
 An accuracy-focused PlayStation 3 emulator, built for research, homebrew development and learning
 how the Cell processor works.
 
-**Status:** milestone M3 is done and M4 (the SPUs) is under way. Real PS3 homebrew built with the
-PSL1GHT SDK runs unmodified:
-multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included) and
-`malloc`.
+**Status:** milestone M4 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
+multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included),
+`malloc`, and SPU threads that talk to the PPU through mailboxes, DMA and atomics.
 
 - **CPU:** the PS3's main core (the PPU) runs its full user instruction set: integer, branch,
   load/store, atomics, floating point (with every FPSCR flag) and the VMX vector unit, including
   the Cell's own vector modes and instructions. Floating point is computed in software, so results
   are exact and identical on every host.
-- **SPU:** the Cell's vector co-processors run their full instruction set in an interpreter,
-  including their non-IEEE single-precision arithmetic. SPU threads, mailboxes and DMA come next.
+- **SPU:** the Cell's vector co-processors run their full instruction set, including their
+  non-IEEE single-precision arithmetic, with every channel: mailboxes, signals, events, the
+  decrementer, and a DMA engine with lists and the atomic lock-line commands. DMA takes virtual
+  time, so programs that forget to wait for it misbehave as they would on hardware.
 - **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
   with deterministic thread scheduling on a virtual clock.
 
@@ -62,6 +63,12 @@ consumer received 1..100: sum 5050
 ping-pong: 10 turns
 slept at least 5 ms: yes
 
+$ ./build/src/ps3emu run build/examples/psl1ght/spu_threads.elf
+group ended: cause 2
+spu 0: exit status 100, sum x 3 = 31344
+spu 1: exit status 101, sum x 5 = 374800
+counter: 3000
+
 $ ./build/src/ps3emu run --trace build/examples/hello.elf
 --- thread 0x1000 "main"
 0x00010000  38600000  li r3, 0
@@ -80,6 +87,7 @@ $ ./build/src/ps3emu run --trace build/examples/hello.elf
 | `ps3emu run <file.elf>` | Runs a program; exits with the program's exit status. |
 | `--trace` | Prints every instruction, syscall, library call and thread switch (to stderr). |
 | `--max-instructions N` | Stops after N instructions. |
+| `--instant-dma` | Makes SPU DMA complete instantly, to tell timing bugs from logic bugs. |
 | `ps3emu info <file.elf>` | Prints the ELF header and segment table. |
 
 ## Legal

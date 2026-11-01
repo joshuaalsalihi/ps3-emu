@@ -18,6 +18,7 @@ constexpr std::string_view k_usage = R"(usage:
   ps3emu run [options] <file.elf>
       --trace               print each instruction as it executes (to stderr)
       --max-instructions N  stop after N instructions
+      --instant-dma         make SPU DMA complete instantly (for debugging)
 )";
 
 std::optional<std::vector<u8>> read_file(std::string_view path) {
@@ -99,6 +100,8 @@ int run_command(const std::vector<std::string_view>& args) {
     for (std::size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--trace") {
             options.trace = &std::cerr;
+        } else if (args[i] == "--instant-dma") {
+            options.instant_dma = true;
         } else if (args[i] == "--max-instructions" && i + 1 < args.size()) {
             const auto count = parse_count(args[++i]);
             if (!count) return usage_error();
