@@ -11,6 +11,7 @@
 #include "common/types.h"
 #include "core/clock.h"
 #include "core/memory.h"
+#include "core/state.h"
 #include "rsx/backend.h"
 
 #include <array>
@@ -27,6 +28,8 @@ struct DisplayBuffer {
     u32 pitch = 0;
     u32 width = 0;
     u32 height = 0;
+
+    void serialize(state::Archive& archive) { archive(offset, pitch, width, height); }
 };
 
 // The video output mode, from cellVideoOutConfigure. PSL1GHT, sysutil/video.h.
@@ -35,6 +38,8 @@ struct VideoMode {
     u8 format = 0;     // VIDEO_BUFFER_FORMAT_XRGB
     u8 aspect = 2;     // VIDEO_ASPECT_16_9
     u32 pitch = 1280 * 4;
+
+    void serialize(state::Archive& archive) { archive(resolution, format, aspect, pitch); }
 };
 
 // cellGcmSetFlipMode. PSL1GHT, rsx/gcm_sys.h.
@@ -113,6 +118,15 @@ public:
     u32 get() const;
     u32 put() const;
 
+    // Saves or loads the RSX's state. The backend and callbacks aren't state.
+    void serialize(state::Archive& archive) {
+        archive(video_mode, initialized_, io_size_, io_pages_, display_buffers_, flip_mode_,
+                flip_status_, queued_flip_, flip_queued_at_, return_offset_, waiting_,
+                semaphore_address_, semaphore_value_, frames_, registers_, transform_program_,
+                transform_program_position_, transform_constants_, transform_constant_position_,
+                primitive_, draw_vertices_, error_);
+    }
+
 private:
     void run_commands();
     void execute(u32 subchannel, u32 method, u32 value);
@@ -148,6 +162,7 @@ private:
     u32 semaphore_address_ = 0;
     u32 semaphore_value_ = 0;
     u64 frames_ = 0;
+    u64 frames_shown_ = 0; // the last frame given to on_frame; not state
 
     std::array<std::array<u32, 0x800>, 8> registers_{}; // 8 subchannels x 2048 methods
 

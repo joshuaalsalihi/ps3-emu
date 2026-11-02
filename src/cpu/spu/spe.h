@@ -28,6 +28,8 @@ struct Spe {
 
     // If the SPU is stopped on a channel access that can't complete yet, the channel.
     std::optional<u32> blocked_channel();
+
+    void serialize(state::Archive& archive) { archive(cpu, dma, channels); }
 };
 
 // Why run() returned.

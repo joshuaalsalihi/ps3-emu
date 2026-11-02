@@ -10,6 +10,7 @@
 
 #include "common/types.h"
 #include "core/clock.h"
+#include "core/state.h"
 #include "cpu/spu/dma.h"
 #include "cpu/spu/state.h"
 
@@ -115,6 +116,14 @@ public:
     // For an SPU stalled on `blocked_channel`: the next cycle at which the passing of time alone
     // might unblock it (a DMA completing, the decrementer firing), if any.
     std::optional<u64> next_deadline(u32 blocked_channel) const;
+
+    void serialize(state::Archive& archive) {
+        archive(signal_or_mode[0], signal_or_mode[1], pending_events_, event_mask_, event_count_,
+                in_mbox_, out_mbox_, out_intr_mbox_, signal_[0], signal_[1], parameters_, tag_mask_,
+                tag_update_request_, tag_status_, list_stall_status_, atomic_status_,
+                queue_was_full_, multisource_sync_target_, decrementer_running_, decrementer_start_,
+                decrementer_written_at_, decrementer_event_at_);
+    }
 
 private:
     void raise(u32 events);

@@ -31,6 +31,11 @@ struct Wait {
     s32 result = 0;           // the result to report once the mutex is ours
     u32 saved_lock_count = 0; // the recursive lock depth to restore
 
+    void serialize(state::Archive& archive) {
+        archive(kind, object, sequence, deadline, output_address, status_address, result,
+                saved_lock_count);
+    }
+
     static Wait on(WaitKind kind, u32 object = 0) {
         Wait wait;
         wait.kind = kind;
@@ -56,12 +61,19 @@ struct PpuThread {
     u64 exit_value = 0;
     u64 stack_address = 0;
     u64 stack_size = 0;
+    u64 executed = 0; // instructions the thread has executed
 
     // Syscall and HLE function arguments are in r3-r10; the result goes in r3.
     u64 arg(u32 index) const { return cpu.state.gpr[3 + index]; }
     // Pointers are 32-bit guest addresses.
     u32 pointer_arg(u32 index) const { return static_cast<u32>(arg(index)); }
     void set_result(s32 result) { cpu.state.gpr[3] = static_cast<u64>(s64{result}); }
+
+    // The identity (id, name, priority) is saved by the kernel, which needs it to create the
+    // thread when loading.
+    void serialize(state::Archive& archive) {
+        archive(cpu, status, wait, joinable, exit_value, stack_address, stack_size, executed);
+    }
 };
 
 } // namespace lv2

@@ -78,6 +78,14 @@ function(add_psl1ght_program name)
             -D EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/${name}.expected
             -D FRAMES=${CMAKE_CURRENT_SOURCE_DIR}/${name}.frames
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../run_example.cmake)
+    add_test(NAME example.psl1ght.${name}.resume
+        COMMAND ${CMAKE_COMMAND}
+            -D EMULATOR=$<TARGET_FILE:ps3emu>
+            -D PROGRAM=${elf}
+            -D EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/${name}.expected
+            -D FRAMES=${CMAKE_CURRENT_SOURCE_DIR}/${name}.frames
+            -D SPLIT=10000
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../run_example.cmake)
 endfunction()
 
 add_psl1ght_program(hello)

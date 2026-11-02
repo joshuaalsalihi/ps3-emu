@@ -433,11 +433,14 @@ void Rsx::complete_flip() {
     const DisplayBuffer& buffer = display_buffers_[*queued_flip_];
     queued_flip_.reset();
     flip_status_ = 0;
-    if (!on_frame) return;
+    ++frames_;
+    // A frame shown before isn't shown again when a debugger replays the run up to it.
+    if (!on_frame || frames_ <= frames_shown_) return;
+    frames_shown_ = frames_;
 
     if (backend_) backend_->flush();
     Frame frame;
-    frame.number = ++frames_;
+    frame.number = frames_;
     frame.width = buffer.width;
     frame.height = buffer.height;
     frame.rgb.reserve(std::size_t{buffer.width} * buffer.height * 3);

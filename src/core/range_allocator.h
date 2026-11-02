@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types.h"
+#include "core/state.h"
 
 #include <map>
 #include <optional>
@@ -22,6 +23,8 @@ public:
     u64 base() const { return base_; }
     u64 end() const { return end_; }
     u64 used() const;
+
+    void serialize(state::Archive& archive) { archive(base_, end_, ranges_); }
 
 private:
     u64 base_;

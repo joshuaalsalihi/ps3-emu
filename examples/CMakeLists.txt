@@ -58,6 +58,13 @@ function(add_guest_program name)
             -D PROGRAM=${elf}
             -D EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/${name}.expected
             -P ${CMAKE_CURRENT_SOURCE_DIR}/run_example.cmake)
+    add_test(NAME example.${name}.resume
+        COMMAND ${CMAKE_COMMAND}
+            -D EMULATOR=$<TARGET_FILE:ps3emu>
+            -D PROGRAM=${elf}
+            -D EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/${name}.expected
+            -D SPLIT=10000
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_example.cmake)
 endfunction()
 
 add_guest_program(hello hello.S)

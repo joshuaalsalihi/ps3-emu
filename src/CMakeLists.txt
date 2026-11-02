@@ -6,6 +6,7 @@ add_library(ps3emu_core STATIC
     core/memory.cpp
     core/range_allocator.cpp
     core/system.cpp
+    core/system_state.cpp
     cpu/ppu/assembler.cpp
     cpu/ppu/branch.cpp
     cpu/ppu/disassembler.cpp
@@ -33,6 +34,9 @@ add_library(ps3emu_core STATIC
     cpu/spu/shift_rotate.cpp
     cpu/spu/spe.cpp
     cpu/spu/spu_float.cpp
+    debug/gdb_packet.cpp
+    debug/gdb_server.cpp
+    debug/trace_diff.cpp
     gpu/msl.cpp
     gpu/rasterizer.cpp
     gpu/reference_backend.cpp
@@ -50,6 +54,7 @@ add_library(ps3emu_core STATIC
     lv2/kernel_event.cpp
     lv2/kernel_memory.cpp
     lv2/kernel_spu.cpp
+    lv2/kernel_state.cpp
     lv2/kernel_sync.cpp
     lv2/sys_event.cpp
     lv2/sys_fs.cpp
@@ -65,6 +70,7 @@ add_library(ps3emu_core STATIC
     rsx/shader_float.cpp
     rsx/vertex_program.cpp
     platform/host_memory_posix.cpp
+    platform/tcp_posix.cpp
 )
 target_include_directories(ps3emu_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ps3emu_core PUBLIC ps3emu_options)

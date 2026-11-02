@@ -2,6 +2,7 @@
 
 #include "common/types.h"
 #include "core/clock.h"
+#include "core/state.h"
 #include "cpu/spu/local_store.h"
 #include "cpu/spu/state.h"
 
@@ -19,9 +20,11 @@ enum class StopReason {
 };
 
 struct Stop {
-    StopReason reason;
+    StopReason reason = StopReason::fault;
     std::string message;
     u32 signal = 0; // stop: the signal type
+
+    void serialize(state::Archive& archive) { archive(reason, message, signal); }
 };
 
 // The signal type stopd reports. The SPU ISA doesn't give one; psdevwiki ("Synergistic
@@ -46,6 +49,10 @@ struct Thread {
     Vector& gpr(u32 n) { return state.gpr[n]; }
     // The preferred word slot of a register: where scalar values and addresses live.
     u32 preferred(u32 n) const { return state.gpr[n].word(0); }
+
+    void serialize(state::Archive& archive) {
+        archive(state, local_store, next_pc, stop, event_pending);
+    }
 };
 
 } // namespace spu

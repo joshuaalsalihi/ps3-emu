@@ -103,54 +103,79 @@ RunResult System::run(const RunOptions& options) {
             return result;
         }
 
-        kernel_.update_spu_threads();
-        kernel_.wake_timed_out_threads();
-        rsx_.run();
-        if (const auto& error = rsx_.error()) {
-            result.outcome = RunResult::Outcome::faulted;
-            result.message = *error;
-            return result;
-        }
-        const lv2::Runnable next = kernel_.next_thread();
-        if (!next) {
-            // Nothing can run: let the RSX work or time pass, or report how the run ended.
-            if (rsx_.has_work()) continue;
-            if (kernel_.skip_to_next_timeout(rsx_.next_deadline())) continue;
-            if (kernel_.all_threads_finished()) {
-                // UNVERIFIED: the exit status when the process ends because its threads did.
-                result.outcome = RunResult::Outcome::exited;
+        if (!turn_) {
+            const bool ready = begin_turn();
+            if (const auto& error = rsx_.error()) {
+                result.outcome = RunResult::Outcome::faulted;
+                result.message = *error;
                 return result;
             }
-            result.outcome = RunResult::Outcome::deadlocked;
-            result.message = "every thread is waiting:" + kernel_.describe_waits();
-            if (const std::string rsx_wait = rsx_.describe_wait(); !rsx_wait.empty()) {
-                result.message += "\n  " + rsx_wait;
+            if (!ready) {
+                // Nothing can run: let the RSX work or time pass, or report how the run ended.
+                if (rsx_.has_work()) continue;
+                if (kernel_.skip_to_next_timeout(rsx_.next_deadline())) continue;
+                if (kernel_.all_threads_finished()) {
+                    // UNVERIFIED: the exit status when the process ends because its threads did.
+                    result.outcome = RunResult::Outcome::exited;
+                    return result;
+                }
+                result.outcome = RunResult::Outcome::deadlocked;
+                result.message = "every thread is waiting:" + kernel_.describe_waits();
+                if (const std::string rsx_wait = rsx_.describe_wait(); !rsx_wait.empty()) {
+                    result.message += "\n  " + rsx_wait;
+                }
+                return result;
             }
-            return result;
         }
 
-        const u64 budget =
-            std::min(lv2::Kernel::k_time_slice, options.max_instructions - result.instructions);
+        u64 budget = std::min(turn_->remaining, options.max_instructions - result.instructions);
 
-        if (next.spu) {
-            if (options.trace && next.spu != previous_spu) {
-                *options.trace << std::format("--- SPU thread {:#x} \"{}\"\n", next.spu->id,
-                                              next.spu->name);
+        if (lv2::SpuThread* spu = turn_->spu) {
+            if (options.trace && spu != previous_spu) {
+                *options.trace << std::format("--- SPU thread {:#x} \"{}\"\n", spu->id, spu->name);
             }
-            previous_spu = next.spu;
+            previous_spu = spu;
             previous = nullptr;
-            if (!run_spu_thread(*next.spu, budget, options.trace, result)) return result;
+            bool ended = false;
+            result.thread = 0;
+            if (!run_spu_thread(*spu, budget, options.trace, result, ended)) return result;
+            if (ended) turn_.reset();
             continue;
         }
 
-        lv2::PpuThread* thread = next.ppu;
+        lv2::PpuThread* thread = turn_->ppu;
+        const bool stepping = options.step_thread == thread->id;
+        if (stepping) budget = 1;
+        if (options.stop_at && options.stop_at->thread == thread->id) {
+            if (thread->executed >= options.stop_at->executed) {
+                result.outcome = RunResult::Outcome::reached;
+                result.thread = thread->id;
+                return result;
+            }
+            budget = std::min(budget, options.stop_at->executed - thread->executed);
+        }
         if (options.trace && thread != previous) {
             *options.trace << std::format("--- thread {:#x} \"{}\"\n", thread->id, thread->name);
         }
         previous = thread;
         previous_spu = nullptr;
 
-        result.instructions += ppu::interpret(thread->cpu, budget, options.trace);
+        const u64 executed =
+            ppu::interpret(thread->cpu, budget, options.trace, options.breakpoints);
+        result.instructions += executed;
+        instructions_ += executed;
+        thread->executed += executed;
+        turn_->remaining -= executed;
+        result.thread = thread->id;
+
+        // A breakpoint stops the run before the instruction, leaving the turn as it was.
+        if (thread->cpu.stop && thread->cpu.stop->reason == ppu::StopReason::breakpoint) {
+            thread->cpu.stop.reset();
+            result.outcome = RunResult::Outcome::breakpoint;
+            return result;
+        }
+        // A syscall or HLE call ends the turn, as does using it up.
+        if (thread->cpu.stop || turn_->remaining == 0) turn_.reset();
 
         if (thread->cpu.stop && !handle_stop(*thread, options.trace)) {
             result.outcome = RunResult::Outcome::faulted;
@@ -158,7 +183,22 @@ RunResult System::run(const RunOptions& options) {
                                          describe_stop(thread->cpu));
             return result;
         }
+        if (stepping && executed == 1) {
+            result.outcome = RunResult::Outcome::stepped;
+            return result;
+        }
     }
+}
+
+bool System::begin_turn() {
+    kernel_.update_spu_threads();
+    kernel_.wake_timed_out_threads();
+    rsx_.run();
+    if (rsx_.error()) return false;
+    const lv2::Runnable next = kernel_.next_thread();
+    if (!next) return false;
+    turn_ = Turn{next.ppu, next.spu, lv2::Kernel::k_time_slice};
+    return true;
 }
 
 // Points the RSX at the chosen backend. Returns an error if it isn't available here.
@@ -182,11 +222,13 @@ std::optional<std::string> System::select_gpu(RunOptions::Gpu gpu) {
     return std::nullopt;
 }
 
-// Gives an SPU thread its turn. Returns false if the run must end with a fault.
 bool System::run_spu_thread(lv2::SpuThread& thread, u64 budget, std::ostream* trace,
-                            RunResult& result) {
+                            RunResult& result, bool& ended) {
     const spu::SpeRun run = spu::run(*thread.spe, budget, trace);
     result.instructions += run.instructions;
+    instructions_ += run.instructions;
+    turn_->remaining -= run.instructions;
+    ended = run.exit != spu::SpeExit::budget || turn_->remaining == 0;
 
     std::string fault;
     switch (run.exit) {

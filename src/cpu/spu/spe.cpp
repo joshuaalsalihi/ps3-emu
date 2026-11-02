@@ -38,12 +38,14 @@ SpeRun run(Spe& spe, u64 budget, std::ostream* trace) {
     Thread& t = spe.cpu;
     u64 executed = 0;
 
+    // One instruction at a time, so DMA completes (and events arrive) before the first
+    // instruction that could see it, however the budget is split up.
     while (executed < budget) {
         spe.channels.update();
         if (const auto& error = spe.dma.error()) return fault(executed, *error);
         t.event_pending = spe.channels.event_waiting();
 
-        executed += interpret(t, budget - executed, trace);
+        executed += interpret(t, 1, trace);
         if (!t.stop) continue;
 
         switch (t.stop->reason) {

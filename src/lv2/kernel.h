@@ -100,6 +100,12 @@ public:
     void handle_syscall(PpuThread& thread);
     const SyscallInfo* find_syscall(u32 number) const;
 
+    // ---- Console ----
+
+    // Writes the guest's console output to `tty`. Output already written once isn't written
+    // again when a debugger goes back in time and runs forward over it.
+    void write_tty(std::span<const u8> bytes);
+
     // ---- Process ----
 
     void exit_process(s32 status);
@@ -254,6 +260,11 @@ public:
     s32 search_and_map_memory_block(u32 range_start, u32 block_id, u32& address);
     s32 unmap_memory_block(u32 address, u32& block_id);
 
+    // ---- Save states (kernel_state.cpp) ----
+
+    // Saves or loads every thread and object. Loading replaces those there were.
+    void serialize(state::Archive& archive);
+
 private:
     void finish_cond_wait(PpuThread& waiter, s32 result);
     void hand_off_mutex(Mutex& mutex, u32 mutex_id);
@@ -283,6 +294,9 @@ private:
     std::map<u64, RangeAllocator> mapped_blocks_; // per reserved range: where blocks are mapped
 
     std::optional<s32> exit_status_;
+
+    u64 tty_written_ = 0; // bytes the guest has written to the console
+    u64 tty_shown_ = 0;   // bytes passed on to `tty`, across replays; not state
 };
 
 } // namespace lv2

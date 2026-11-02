@@ -92,6 +92,19 @@ void Kernel::exit_process(s32 status) {
     exit_status_ = status;
 }
 
+// ---- Console ----
+
+void Kernel::write_tty(std::span<const u8> bytes) {
+    const u64 end = tty_written_ + bytes.size();
+    if (end > tty_shown_) {
+        const u64 skip = tty_shown_ > tty_written_ ? tty_shown_ - tty_written_ : 0;
+        tty.write(reinterpret_cast<const char*>(bytes.data() + skip),
+                  static_cast<std::streamsize>(bytes.size() - skip));
+        tty_shown_ = end;
+    }
+    tty_written_ = end;
+}
+
 // ---- Threads ----
 
 PpuThread* Kernel::create_thread(std::string name, u64 entry, u64 toc, u64 argument, s32 priority,
