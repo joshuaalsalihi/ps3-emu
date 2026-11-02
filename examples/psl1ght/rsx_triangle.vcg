@@ -1,0 +1,5 @@
+!!ARBvp1.0
+# rsx_triangle's vertex program: positions are already in clip space.
+MOV result.position, vertex.position;
+MOV result.color, vertex.color;
+END

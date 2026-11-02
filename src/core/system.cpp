@@ -5,6 +5,9 @@
 #include "cpu/ppu/interpreter.h"
 #include "cpu/spu/disassembler.h"
 #include "cpu/spu/spe.h"
+#ifdef PS3EMU_HAS_METAL
+#include "gpu/metal_backend.h"
+#endif
 #include "loader/elf.h"
 #include "loader/process_info.h"
 #include "loader/program.h"
@@ -37,7 +40,10 @@ std::string describe_unknown_spu_stop(u32 signal) {
 
 } // namespace
 
-System::System(std::ostream& tty) : kernel_(memory_, clock_, tty) {}
+System::System(std::ostream& tty)
+    : kernel_(memory_, clock_, tty), rsx_(memory_, clock_), reference_backend_(memory_) {
+    kernel_.rsx = &rsx_;
+}
 
 void System::load(std::span<const u8> elf_file) {
     const loader::ElfFile elf = loader::parse_elf(elf_file);
@@ -78,6 +84,13 @@ RunResult System::run(const RunOptions& options) {
     const lv2::PpuThread* previous = nullptr;
     const lv2::SpuThread* previous_spu = nullptr;
     kernel_.instant_dma = options.instant_dma;
+    if (const auto error = select_gpu(options.gpu)) {
+        result.outcome = RunResult::Outcome::faulted;
+        result.message = *error;
+        return result;
+    }
+    rsx_.on_frame = options.on_frame;
+    rsx_.trace = options.trace;
 
     while (true) {
         if (const auto status = kernel_.exit_status()) {
@@ -92,10 +105,17 @@ RunResult System::run(const RunOptions& options) {
 
         kernel_.update_spu_threads();
         kernel_.wake_timed_out_threads();
+        rsx_.run();
+        if (const auto& error = rsx_.error()) {
+            result.outcome = RunResult::Outcome::faulted;
+            result.message = *error;
+            return result;
+        }
         const lv2::Runnable next = kernel_.next_thread();
         if (!next) {
-            // Nothing can run: let time pass until a timeout, or report how the run ended.
-            if (kernel_.skip_to_next_timeout()) continue;
+            // Nothing can run: let the RSX work or time pass, or report how the run ended.
+            if (rsx_.has_work()) continue;
+            if (kernel_.skip_to_next_timeout(rsx_.next_deadline())) continue;
             if (kernel_.all_threads_finished()) {
                 // UNVERIFIED: the exit status when the process ends because its threads did.
                 result.outcome = RunResult::Outcome::exited;
@@ -103,6 +123,9 @@ RunResult System::run(const RunOptions& options) {
             }
             result.outcome = RunResult::Outcome::deadlocked;
             result.message = "every thread is waiting:" + kernel_.describe_waits();
+            if (const std::string rsx_wait = rsx_.describe_wait(); !rsx_wait.empty()) {
+                result.message += "\n  " + rsx_wait;
+            }
             return result;
         }
 
@@ -136,6 +159,27 @@ RunResult System::run(const RunOptions& options) {
             return result;
         }
     }
+}
+
+// Points the RSX at the chosen backend. Returns an error if it isn't available here.
+std::optional<std::string> System::select_gpu(RunOptions::Gpu gpu) {
+    switch (gpu) {
+    case RunOptions::Gpu::reference: rsx_.set_backend(&reference_backend_); return std::nullopt;
+    case RunOptions::Gpu::null: rsx_.set_backend(&null_backend_); return std::nullopt;
+    case RunOptions::Gpu::metal:
+#ifdef PS3EMU_HAS_METAL
+        if (!metal_backend_) {
+            std::string error;
+            metal_backend_ = gpu::MetalBackend::create(memory_, error);
+            if (!metal_backend_) return "Metal: " + error;
+        }
+        rsx_.set_backend(metal_backend_.get());
+        return std::nullopt;
+#else
+        return "the Metal backend is only available on macOS";
+#endif
+    }
+    return std::nullopt;
 }
 
 // Gives an SPU thread its turn. Returns false if the run must end with a fault.

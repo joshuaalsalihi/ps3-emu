@@ -86,6 +86,16 @@ TEST_CASE_METHOD(LinkerTest, "each stub points at a descriptor for an `hle n; bl
     }
 }
 
+TEST_CASE_METHOD(LinkerTest, "firmware-internal functions get thunks at fixed addresses") {
+    const u32 descriptor =
+        hle::Linker::internal_descriptor(hle::InternalFunction::gcm_command_buffer_full);
+    const u32 thunk = memory.read<u32>(descriptor);
+    const u32 index = hle::Linker::k_internal_index;
+    CHECK(memory.read<u32>(thunk) == (0x04000000 | index));
+    CHECK(memory.read<u32>(thunk + 4) == 0x4e800020);
+    CHECK(linker.name(index) == "(firmware).cellGcmCallback");
+}
+
 TEST_CASE_METHOD(LinkerTest, "imports are named after their HLE function, or their NID") {
     CHECK(linker.name(lwmutex_lock) == "sysPrxForUser.sys_lwmutex_lock");
     CHECK(linker.name(unknown) == "sysPrxForUser.0x12345678");

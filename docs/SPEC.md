@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.8 · 2026-11-01 · M4 complete, plus event queues
+**Status:** Draft v0.11 · 2026-11-01 · M5 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -291,6 +291,7 @@ A multi-threaded mode for speed may come later. It will not support replay or tr
 | `0x2fff'0000` | Kernel stubs that threads return to |
 | `0x3000'0000` | User memory (`sys_memory_allocate`), 256 MB |
 | `0x4000'0000` | Memory mapper address ranges (`sys_mmapper`), e.g. PSL1GHT's heap |
+| `0xc000'0000` | RSX local memory, 256 MB, mapped once a program initializes libgcm; its top 7 MB hold libgcm's control register, context and labels |
 | `0xd000'0000` | Thread stacks and TLS, each stack with a guard page below it |
 
 ---
@@ -300,13 +301,54 @@ A multi-threaded mode for speed may come later. It will not support replay or tr
 ```
 FIFO → command decoder → RSX state (all registers, inspectable) → GPU backend
 ```
+- **FIFO** (`rsx::Rsx`): the PPU writes commands into IO-mapped main memory and moves PUT in
+  the control register; the RSX reads from GET to PUT. Commands follow NVIDIA's NV4-style
+  format (envytools): method writes (increasing or not), jumps, one level of call and return.
+  The RSX takes a turn before each thread's turn and handles up to 10,000 commands, until it
+  runs out or must wait (a semaphore, or a queued flip). When nothing else can run, the clock
+  skips to the next vblank a flip waits for.
+- **Memory:** 256 MB of local memory at `0xc0000000`; main memory reaches the RSX only through
+  the IO map (1 MB pages). Methods name addresses by offset plus a DMA context: local
+  (`0xfeed0000`) or main (`0xfeed0001`).
 - **State model:** independent of the backend, and dumpable at any draw call. Semaphores, reports and
-  flip/vblank events are handled here, not in the backend.
-- **Shaders:** RSX vertex and fragment programs are decoded into a shared IR, then emitted as Metal
-  Shading Language (SPIR-V later). Cached by hash.
+  flip/vblank events are handled here, not in the backend. It keeps the last value of every
+  method on every subchannel, and turns the ones that act (clears, draws) into backend requests.
+- **libgcm and video output** are HLE (`cellGcmSys`, `cellSysutil`). Initialization maps the
+  IO buffer at IO offset 0 and puts the default command buffer 4 KB into it; when it fills up,
+  the firmware's callback jumps back to the start once the RSX has caught up. Flips and
+  wait-flips are written as two emulator-private methods (subchannel 7), since real libgcm's
+  encoding is unknown to us. A vsync flip completes at the next vblank (60 Hz), an hsync flip
+  at once.
+- **Frames:** each completed flip produces a frame: the display buffer as 8-bit RGB. `ps3emu run
+  --frames FILE` writes each frame's SHA-1, and `--dump-frames DIR` saves PNGs. Example
+  programs can have a `.frames` file of expected hashes, checked like their `.expected` output.
+- **Shaders:** RSX vertex and fragment programs are decoded into a shared IR (`rsx::vertex` and
+  `rsx::fragment` instructions, with fields from nouveau's NV30/NV40 headers), which the reference
+  backend interprets and GPU backends will translate (Metal Shading Language first, SPIR-V
+  later; cached by hash). Shader arithmetic uses `soft_float` in single precision.
+- **Draws:** BEGIN_END and DRAW_ARRAYS collect vertex indices; ending the primitive builds a
+  draw request (vertex arrays, both programs, viewport, render target). Triangles, strips and
+  fans into one color target, with no depth test, blending or culling yet; enabling those ends
+  the run with a clear "not supported yet" error.
+- **Reference rasterization:** vertices go through the vertex program, the perspective divide
+  and the viewport transform, then snap to 1/16 pixel. Coverage is decided with integer edge
+  functions at pixel centers and a top-left fill rule, so triangles sharing an edge never both
+  cover a pixel. Attributes are interpolated with perspective correction, and the fragment
+  program's color is clamped and rounded to 8 bits per channel.
 - **Surfaces:** a cache tracks render targets. A CPU write to a surface's memory invalidates it;
   reading it back triggers a write-back. Start conservative; optimize later.
-- **Backends:** `Null` (renders nothing; used by CI), `Metal` (first real backend), `Vulkan` (later).
+- **Backends:** `Reference` (software, pixel by pixel into guest memory; exact and identical on
+  every host, so its frames are the golden images, checked in CI), `Null` (renders nothing),
+  `Metal` (first GPU backend, checked against the reference with a small per-pixel tolerance),
+  `Vulkan` (later).
+- **Metal backend** (macOS, Objective-C++ against the system framework): shaders are translated
+  from the IR to Metal Shading Language and compiled at run time, cached per program. For each
+  draw the render target is uploaded from guest memory into a texture, drawn into with the
+  scissor and color mask, and written back, so guest memory always holds the result; keeping
+  surfaces on the GPU comes later. The vertex function applies the RSX viewport transform
+  itself. Metal shades flat triangles from their first vertex, so the backend rotates them to
+  match the reference's last-vertex rule. Clears are memory fills, shared with the reference.
+  On the test machine the PSL1GHT triangle's frame is bit-identical to the reference.
 
 ---
 
@@ -379,7 +421,7 @@ src/
   loader/      ELF, SELF, PRX, SFO
   crypto/      optional; off by default
   rsx/         FIFO, state, shader IR, surfaces, texture decoding
-  gpu/         backends: null, metal
+  gpu/         backends: reference (software), null, metal
   vfs/  audio/  input/  platform/
   debug/       tracing, GDB server, snapshots
   frontend/    CLI
@@ -390,7 +432,7 @@ docs/          this spec and notes
 ```
 
 C++20 · clang · CMake + Ninja · Catch2 · clang-format. Few dependencies: `std::format` instead of
-a formatting library, metal-cpp for graphics, LLVM only if a JIT is added. Debug builds use
+a formatting library, the system Metal framework (from Objective-C++), LLVM only if a JIT is added. Debug builds use
 ASan/UBSan.
 
 ---
@@ -404,7 +446,7 @@ ASan/UBSan.
 | M2 ✅ | Kernel basics | Threads, locks, timers and the scheduler work, deterministically; PSL1GHT "hello world" runs. |
 | M3 ✅ | PPU float + vector | FPU and VMX tests pass, including flags. |
 | M4 ✅ | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
-| M5 | First pixels | FIFO + state model; Metal draws a PSL1GHT triangle matching its golden hash. |
+| M5 ✅ | First pixels | FIFO + state model; the reference backend draws a PSL1GHT triangle matching its golden hash, and Metal draws it within tolerance of the reference. |
 | M6 | Debugging | GDB server, trace diff, save states, replay. |
 | M7 | Shaders + textures | Homebrew 3D samples render correctly. |
 | M8 | Firmware | Fake-signed SELF, LLE libraries from user firmware, `/dev_flash`. |
@@ -441,6 +483,17 @@ ASan/UBSan.
     errors SPU-side receives give (ESRCH for an unbound number, EBUSY for an empty queue on
     `tryreceive`, ECANCELED when the queue is destroyed); that only SPU queues can be bound and
     PPU threads can't receive from them; and that a connected port can't be destroyed.
+13. The RSX and libgcm, where we had to choose: the local memory address (`0xc0000000`) and how
+    much libgcm keeps for itself; the encoding of flips (ours are emulator-private methods);
+    the end of the default command buffer; the scissor after initialization (we use the
+    whole 4096×4096 range); what the X8R8G8B8 formats store in the X byte; the vblank rate
+    (60 Hz, not 59.94); libgcm's and sysutil's error codes (we return EINVAL); the flip status
+    before the first reset; and the RSX's speed (a fixed 10,000 commands per turn).
+14. The RSX's shader and rasterization details: its floating-point rules (we assume IEEE single
+    rounded to nearest, denormals kept, NaN operands giving the default NaN, MAD rounding
+    twice, and exact RCP/RSQ); which sources each vertex opcode reads (we read ADD's second
+    operand from source 2); the subpixel precision (1/16) and fill rule; the flat-shading
+    vertex (the last); and how colors round to 8 bits (to nearest).
 
 ---
 
@@ -452,5 +505,9 @@ ASan/UBSan.
 - *Cell Broadband Engine Architecture* v1.01 (2006): SPU channels, the MFC and its commands
 - *Synergistic Processor Unit Instruction Set Architecture* v1.2 (2007); *SPU Language Extensions*
 - psdevwiki.com (PS3): syscalls, file formats, RSX
-- PSL1GHT: SDK headers and samples, for building test programs
-- envytools: public NVIDIA hardware documentation for NV40/G70 commands
+- PSL1GHT: SDK headers and samples, for building test programs; its `rsx/nv40.h` carries
+  nouveau's NV40 method numbers, and its stub libraries the NIDs of libgcm and sysutil
+- envytools: public NVIDIA hardware documentation for NV40/G70 commands, including the FIFO
+  command format and the vertex program instruction layout ("Curie" XF ISA)
+- Mesa's nouveau driver headers (`nv30/nvfx_shader.h`, `nv30/nv40_vertprog.h`): NV30/NV40
+  vertex and fragment program encodings

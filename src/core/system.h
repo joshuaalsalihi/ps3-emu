@@ -3,11 +3,16 @@
 #include "common/types.h"
 #include "core/clock.h"
 #include "core/memory.h"
+#include "gpu/reference_backend.h"
 #include "hle/linker.h"
 #include "lv2/kernel.h"
+#include "rsx/rsx.h"
 
+#include <functional>
 #include <iosfwd>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -15,6 +20,11 @@ struct RunOptions {
     u64 max_instructions = std::numeric_limits<u64>::max();
     std::ostream* trace = nullptr; // if set, every instruction and call is printed here
     bool instant_dma = false;      // SPU DMA completes the moment it is issued (for debugging)
+
+    enum class Gpu { reference, null, metal }; // metal: macOS only
+
+    Gpu gpu = Gpu::reference;
+    std::function<void(const rsx::Frame&)> on_frame = {}; // called with each frame displayed
 };
 
 struct RunResult {
@@ -46,15 +56,21 @@ public:
     Memory& memory() { return memory_; }
     lv2::Kernel& kernel() { return kernel_; }
     lv2::PpuThread& main_thread() { return *kernel_.threads().front(); }
+    rsx::Rsx& rsx() { return rsx_; }
     const VirtualClock& clock() const { return clock_; }
 
 private:
     // Handles whatever stopped `thread`. Returns false if the run must end with a fault.
     bool handle_stop(lv2::PpuThread& thread, std::ostream* trace);
+    std::optional<std::string> select_gpu(RunOptions::Gpu gpu);
     bool run_spu_thread(lv2::SpuThread& thread, u64 budget, std::ostream* trace, RunResult& result);
 
     VirtualClock clock_;
     Memory memory_;
     lv2::Kernel kernel_;
     hle::Linker linker_;
+    rsx::Rsx rsx_;
+    gpu::ReferenceBackend reference_backend_;
+    gpu::NullBackend null_backend_;
+    std::unique_ptr<rsx::Backend> metal_backend_; // created when first asked for
 };

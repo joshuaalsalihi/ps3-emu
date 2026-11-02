@@ -13,6 +13,16 @@ TEST_CASE("NIDs match the ones in PSL1GHT's sysPrxForUser import table") {
     CHECK(hle::nid("_sys_printf") == 0x9f04f7af);
 }
 
+TEST_CASE("NIDs match the ones in PSL1GHT's cellGcmSys and cellSysutil stub libraries") {
+    // Expected values: the *_fnid symbols in PSL1GHT's libgcm_sys.a and libsysutil.a.
+    CHECK(hle::nid("_cellGcmInitBody") == 0x15bae46b);
+    CHECK(hle::nid("cellGcmAddressToOffset") == 0x21ac3697);
+    CHECK(hle::nid("_cellGcmSetFlipCommand") == 0x21397818);
+    CHECK(hle::nid("cellGcmSetWaitFlip") == 0x983fb9aa);
+    CHECK(hle::nid("cellVideoOutConfigure") == 0x0bae8772);
+    CHECK(hle::nid("cellVideoOutGetState") == 0x887572d5);
+}
+
 TEST_CASE("HLE function names are unique within each module") {
     for (const hle::ModuleInfo& module : hle::modules()) {
         for (std::size_t i = 0; i < module.functions.size(); ++i) {

@@ -1,5 +1,6 @@
 # Emulator library: everything except the frontend, so tests can link against it.
 add_library(ps3emu_core STATIC
+    common/png.cpp
     common/sha1.cpp
     common/soft_float.cpp
     core/memory.cpp
@@ -32,6 +33,12 @@ add_library(ps3emu_core STATIC
     cpu/spu/shift_rotate.cpp
     cpu/spu/spe.cpp
     cpu/spu/spu_float.cpp
+    gpu/msl.cpp
+    gpu/rasterizer.cpp
+    gpu/reference_backend.cpp
+    gpu/vertex_input.cpp
+    hle/cell_gcm_sys.cpp
+    hle/cell_sysutil.cpp
     hle/linker.cpp
     hle/nid.cpp
     hle/sys_prx_for_user.cpp
@@ -53,10 +60,22 @@ add_library(ps3emu_core STATIC
     lv2/sys_sync.cpp
     lv2/sys_time.cpp
     lv2/sys_tty.cpp
+    rsx/fragment_program.cpp
+    rsx/rsx.cpp
+    rsx/shader_float.cpp
+    rsx/vertex_program.cpp
     platform/host_memory_posix.cpp
 )
 target_include_directories(ps3emu_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(ps3emu_core PUBLIC ps3emu_options)
+
+# The Metal backend, on macOS: Objective-C++ against the system's Metal framework.
+if(APPLE)
+    target_sources(ps3emu_core PRIVATE gpu/metal_backend.mm)
+    set_source_files_properties(gpu/metal_backend.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+    target_link_libraries(ps3emu_core PUBLIC "-framework Metal" "-framework Foundation")
+    target_compile_definitions(ps3emu_core PUBLIC PS3EMU_HAS_METAL)
+endif()
 
 add_executable(ps3emu frontend/cli/main.cpp)
 target_link_libraries(ps3emu PRIVATE ps3emu_core)

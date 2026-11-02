@@ -34,7 +34,16 @@ struct ModuleInfo {
 
 // The libraries with HLE functions, each defined in its own file.
 std::span<const FunctionInfo> sys_prx_for_user_functions();
+std::span<const FunctionInfo> cell_gcm_sys_functions();
+std::span<const FunctionInfo> cell_sysutil_functions();
 const std::vector<ModuleInfo>& modules();
+
+// Firmware functions that programs don't import but are given pointers to, such as callbacks.
+enum class InternalFunction : u32 {
+    gcm_command_buffer_full, // libgcm's default command buffer callback
+};
+// Their HLE versions, in InternalFunction order.
+std::span<const FunctionInfo> internal_functions();
 
 class Linker {
 public:
@@ -42,6 +51,15 @@ public:
     // clear of the ranges the kernel hands out.
     static constexpr u64 k_area = 0x2f00'0000;
     static constexpr u64 k_area_size = 0x00ff'0000;
+    static constexpr u64 k_entry_size = 16; // thunk (8 bytes) + descriptor (8 bytes)
+    // Internal functions live in the area's last page, and `hle` numbers them from here.
+    static constexpr u64 k_internal_area = k_area + k_area_size - Memory::k_page_size;
+    static constexpr u32 k_internal_index = 0x20'0000;
+
+    // The function descriptor guest code can call an internal function through.
+    static constexpr u32 internal_descriptor(InternalFunction function) {
+        return static_cast<u32>(k_internal_area + static_cast<u32>(function) * k_entry_size + 8);
+    }
 
     void link(const std::vector<loader::ImportedFunction>& imports, Memory& memory);
 
