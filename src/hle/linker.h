@@ -8,6 +8,7 @@
 
 #include "common/types.h"
 #include "core/memory.h"
+#include "core/state.h"
 #include "loader/process_info.h"
 #include "lv2/kernel.h"
 
@@ -69,11 +70,14 @@ public:
     // "sysPrxForUser.sys_lwmutex_lock", or the module and NID if the name is unknown.
     std::string name(u32 index) const;
 
+    // Saves or loads the bindings. Each function is looked up again by its NID when loading.
+    void serialize(state::Archive& archive);
+
 private:
     struct Binding {
         std::string module;
-        u32 nid;
-        const FunctionInfo* function; // null if not implemented
+        u32 nid = 0;
+        const FunctionInfo* function = nullptr; // null if not implemented
         bool warned = false;
     };
     std::vector<Binding> bindings_;

@@ -60,13 +60,14 @@ TEST_CASE_METHOD(SpuTest, "instruction fetch wraps around the end of local store
     CHECK(thread.state.pc == 4);
 }
 
-TEST_CASE_METHOD(SpuTest, "the interpreter traces each instruction and counts cycles") {
+TEST_CASE_METHOD(SpuTest,
+                 "the interpreter traces each instruction, with the registers it changed") {
     thread.local_store.write<u32>(0, spu::assemble("il $3, 1"));
     thread.local_store.write<u32>(4, spu::assemble("br 0", 4));
     std::ostringstream trace;
     CHECK(spu::interpret(thread, 3, &trace) == 3);
     CHECK(clock.cycles() == 3);
-    CHECK(trace.str() == "spu 0x00000  40800083  il $3, 1\n"
+    CHECK(trace.str() == "spu 0x00000  40800083  il $3, 1  -> $3=00000001000000010000000100000001\n"
                          "spu 0x00004  327fff80  br 0x0\n"
-                         "spu 0x00000  40800083  il $3, 1\n");
+                         "spu 0x00000  40800083  il $3, 1\n"); // $3 is already 1
 }

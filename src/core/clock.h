@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types.h"
+#include "core/state.h"
 
 // The emulator's notion of time, measured in guest CPU cycles. Guest-visible time (the
 // timebase, timers) derives from this, never from the host clock, so runs are deterministic.
@@ -21,6 +22,8 @@ public:
 
     // The first cycle at which timebase() reaches `ticks`.
     static constexpr u64 cycle_of_timebase(u64 ticks) { return (ticks * 16'000 + 398) / 399; }
+
+    void serialize(state::Archive& archive) { archive(cycles_); }
 
 private:
     u64 cycles_ = 0;

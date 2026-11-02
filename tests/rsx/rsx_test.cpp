@@ -269,3 +269,39 @@ TEST_CASE_METHOD(RsxTest, "a flip to a display buffer that doesn't exist is an e
     rsx.run();
     CHECK(rsx.error());
 }
+
+TEST_CASE_METHOD(RsxTest, "frames are counted without a callback, and shown only once") {
+    rsx.set_flip_mode(FlipMode::hsync);
+    rsx.set_display_buffer(0, {0, 64, 1, 1});
+    push({k_flip, 0});
+    // The RSX's state, with memory, which holds the FIFO and its GET pointer.
+    auto save = [&] {
+        state::Archive archive;
+        memory.serialize(archive);
+        rsx.serialize(archive);
+        return archive.take_bytes();
+    };
+    auto load = [&](const std::vector<u8>& bytes) {
+        state::Archive archive(bytes);
+        memory.serialize(archive);
+        rsx.serialize(archive);
+    };
+    const std::vector<u8> start = save();
+
+    // Frames count whether or not anyone watches, so a save state doesn't depend on it.
+    rsx.on_frame = nullptr;
+    rsx.run();
+    const std::vector<u8> unwatched = save();
+
+    rsx.on_frame = [this](const Frame& frame) { frames.push_back(frame); };
+    load(start);
+    rsx.run();
+    CHECK(save() == unwatched);
+    REQUIRE(frames.size() == 1);
+    CHECK(frames[0].number == 1);
+
+    // Going back and replaying the flip doesn't show the frame twice.
+    load(start);
+    rsx.run();
+    CHECK(frames.size() == 1);
+}

@@ -2,6 +2,7 @@
 
 #include "common/types.h"
 #include "common/vector.h"
+#include "core/state.h"
 
 #include <array>
 
@@ -21,6 +22,8 @@ struct Xer {
         ca = (value >> 29) & 1;
         byte_count = value & 0x7f;
     }
+
+    void serialize(state::Archive& archive) { archive(so, ov, ca, byte_count); }
 };
 
 // Condition register values for a 4-bit field (LT, GT, EQ, SO).
@@ -66,6 +69,10 @@ struct State {
     void set_cr_field(u32 field, u32 value) {
         const u32 shift = 28 - 4 * field;
         cr = (cr & ~(u32{0xf} << shift)) | ((value & 0xf) << shift);
+    }
+
+    void serialize(state::Archive& archive) {
+        archive(gpr, fpr, vr, fpscr, vscr, cr, lr, ctr, xer, vrsave, pc);
     }
 };
 

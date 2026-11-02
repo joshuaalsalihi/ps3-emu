@@ -5,7 +5,7 @@ Seeing if giving Anthropic $20/month is enough to fulfill a childhood dream.
 An accuracy-focused PlayStation 3 emulator, built for research, homebrew development and learning
 how the Cell processor works.
 
-**Status:** milestone M5 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
+**Status:** milestone M6 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
 multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included),
 `malloc`, SPU threads that talk to the PPU through mailboxes, DMA, atomics and event queues
 (`spu_printf` included), and graphics: the RSX clears the screen, draws shaded triangles and
@@ -25,6 +25,10 @@ flips to the display.
   flips, and triangles drawn with vertex and fragment programs. A software reference renderer
   produces exact, host-independent frames, which can be saved as PNGs or checked by hash; on
   macOS, Metal draws the same frames on the GPU. Textures, depth and blending come next.
+- **Debugging:** a GDB server (breakpoints, stepping, registers and memory, SPU inspection
+  through `monitor` commands, and going back in time with `reverse-stepi` and
+  `reverse-continue`), save states, and traces that show each instruction's results and can be
+  diffed against each other.
 
 See the [spec](docs/SPEC.md) for the architecture and roadmap.
 
@@ -84,14 +88,28 @@ ppu: user event from the calculator, port 2: 2 -> 10
 $ ./build/src/ps3emu run --trace build/examples/hello.elf
 --- thread 0x1000 "main"
 0x00010000  38600000  li r3, 0
-0x00010004  3c800002  lis r4, 2
-0x00010008  38840008  addi r4, r4, 8
-0x0001000c  38a00014  li r5, 20
+0x00010004  3c800002  lis r4, 2  -> r4=0x20000
+0x00010008  38840008  addi r4, r4, 8  -> r4=0x20008
+0x0001000c  38a00014  li r5, 20  -> r5=0x14
 0x00010010  38c00000  li r6, 0
-0x00010014  39600193  li r11, 403
+0x00010014  39600193  li r11, 403  -> r11=0x193
 0x00010018  44000002  sc
     syscall 403 sys_tty_write
 ...
+```
+
+Each instruction shows the registers it changed. Since runs are deterministic, two traces of the
+same program match line for line until something differs, and `trace-diff` finds that line:
+
+```
+$ ./build/src/ps3emu run --trace build/examples/psl1ght/spu_threads.elf 2> a.trace
+$ ./build/src/ps3emu run --instant-dma --trace build/examples/psl1ght/spu_threads.elf 2> b.trace
+$ ./build/src/ps3emu trace-diff a.trace b.trace
+traces differ at line 2755, after 2714 instructions, in SPU thread 0x1005 "worker":
+  ...
+  spu 0x000f8  01a00c02  rdch $2, $ch24
+- --- thread 0x1000 "main"
++     MFC_RdTagStat -> 0x2
 ```
 
 | Command | What it does |
@@ -103,7 +121,41 @@ $ ./build/src/ps3emu run --trace build/examples/hello.elf
 | `--frames FILE` | Writes the size and SHA-1 of each frame the program displays to FILE. |
 | `--dump-frames DIR` | Saves each displayed frame as a PNG in DIR. |
 | `--gpu reference\|metal\|null` | Renders in software (the default), with Metal (macOS), or not at all. |
+| `--save-state FILE` | Saves the whole machine's state to FILE when the run stops. |
+| `--gdb PORT` | Waits for GDB on localhost:PORT and runs under its control. |
+| `ps3emu resume <file.state>` | Continues a saved state, exactly as the original run would have; takes the same options as `run`. |
+| `ps3emu trace-diff <a> <b>` | Shows where two traces first differ, with the lines before it. |
 | `ps3emu info <file.elf>` | Prints the ELF header and segment table. |
+
+## Debugging with GDB
+
+Start the program with `--gdb`, then connect a GDB that knows 64-bit PowerPC (on Linux,
+`gdb-multiarch`):
+
+```
+$ ./build/src/ps3emu run --gdb 2345 build/examples/psl1ght/spu_threads.elf
+waiting for GDB on localhost:2345
+
+$ gdb-multiarch build/examples/psl1ght/spu_threads.elf
+(gdb) target remote :2345
+(gdb) break *(*(unsigned long *)&main)
+(gdb) continue
+Breakpoint 1, 0x0000000000010660 in main ()
+(gdb) tbreak printf
+(gdb) continue
+Temporary breakpoint 2.1, printf (fmt=0x100000e0 "group ended: cause %u\n") at ...
+(gdb) monitor spu
+0: thread 0x1005 "worker", finished, pc 0x4d8
+1: thread 0x1006 "worker", finished, pc 0x4d8
+(gdb) reverse-stepi
+0x0000000000010948 in main ()
+(gdb) x/i $pc
+=> 0x10948 <.main+744>:	bl      0x14a30 <printf>
+```
+
+PS3 symbols like `main` name function descriptors, hence the `break` on the address `main`'s
+descriptor holds. `monitor help` lists the SPU commands. Going back in time replays the program
+from a checkpoint, which is exact because runs are deterministic.
 
 ## Legal
 

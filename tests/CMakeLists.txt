@@ -17,6 +17,7 @@ add_executable(ps3emu_tests
     common/soft_float_test.cpp
     core/memory_test.cpp
     core/range_allocator_test.cpp
+    core/state_test.cpp
     core/system_test.cpp
     cpu/ppu/assembler_test.cpp
     cpu/ppu/branch_test.cpp
@@ -35,6 +36,9 @@ add_executable(ps3emu_tests
     cpu/spu/load_store_test.cpp
     cpu/spu/shift_rotate_test.cpp
     cpu/spu/spu_float_test.cpp
+    debug/gdb_packet_test.cpp
+    debug/gdb_server_test.cpp
+    debug/trace_diff_test.cpp
     gpu/msl_test.cpp
     gpu/rasterizer_test.cpp
     hle/cell_gcm_sys_test.cpp

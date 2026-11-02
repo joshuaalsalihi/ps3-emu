@@ -2,6 +2,7 @@
 
 #include "common/types.h"
 #include "common/vector.h"
+#include "core/state.h"
 
 #include <array>
 
@@ -48,6 +49,8 @@ struct State {
     void set_fpscr_bit(u32 bit) {
         fpscr.set_byte(bit / 8, static_cast<u8>(fpscr.byte(bit / 8) | (0x80 >> (bit % 8))));
     }
+
+    void serialize(state::Archive& archive) { archive(gpr, fpscr, pc, srr0, interrupts_enabled); }
 };
 
 } // namespace spu

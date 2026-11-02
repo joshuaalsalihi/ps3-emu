@@ -101,6 +101,15 @@ void Linker::call(u32 index, lv2::Kernel& kernel, lv2::PpuThread& thread) {
     }
 }
 
+void Linker::serialize(state::Archive& archive) {
+    const u64 count = archive.size(bindings_.size());
+    if (archive.loading()) bindings_.assign(count, Binding{});
+    for (Binding& binding : bindings_) {
+        archive(binding.module, binding.nid, binding.warned);
+        if (archive.loading()) binding.function = find_function(binding.module, binding.nid);
+    }
+}
+
 std::string Linker::name(u32 index) const {
     if (is_internal(index)) {
         return std::format("(firmware).{}", internal_functions()[index - k_internal_index].name);

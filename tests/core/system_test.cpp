@@ -7,53 +7,20 @@
 #include "hle/nid.h"
 #include "support/elf_builder.h"
 #include "support/import_builder.h"
+#include "support/test_programs.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <vector>
 
 using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::StartsWith;
-
-namespace {
-
-constexpr u64 k_code = 0x10000;
-constexpr u64 k_data = 0x20000;
-constexpr u64 k_data_size = 0x400;
-
-constexpr u32 k_read_execute = loader::k_segment_flag_r | loader::k_segment_flag_x;
-constexpr u32 k_read_write = loader::k_segment_flag_r | loader::k_segment_flag_w;
-
-// A program with `code` at 0x10000 and `data` at 0x20000. The entry descriptor is the data's
-// first 8 bytes, so data[0..7] must be {0x10000, 0}.
-std::vector<u8> make_test_program(const std::vector<std::string_view>& code, std::vector<u8> data,
-                                  const std::vector<test::InfoSegmentSpec>& info = {}) {
-    return test::make_program(
-        {
-            {k_code, k_read_execute, test::words_to_bytes(ppu::assemble(code, k_code))},
-            {k_data, k_read_write, std::move(data)},
-        },
-        k_data, info);
-}
-
-// Data with the entry descriptor followed by "hi\n" at 0x20008.
-std::vector<u8> hello_data() {
-    std::vector<u8> data = test::words_to_bytes({k_code, 0});
-    data.insert(data.end(), {'h', 'i', '\n'});
-    return data;
-}
-
-const std::vector<std::string_view> k_hello_and_exit = {
-    "li r3, 0", "lis r4, 2", "addi r4, r4, 8",
-    "li r5, 3", "li r6, 0",  "li r11, 403",
-    "sc",                          // sys_tty_write
-    "li r3, 7", "li r11, 3", "sc", // sys_process_exit
-};
-
-} // namespace
+using namespace test;
 
 TEST_CASE("a program prints and exits") {
     std::ostringstream tty;
@@ -114,9 +81,27 @@ TEST_CASE("runs can be limited and traced") {
     const RunResult result = system.run({.max_instructions = 5, .trace = &trace});
     CHECK(result.outcome == RunResult::Outcome::instruction_limit);
     CHECK(result.instructions == 5);
+    // Each instruction shows the registers it changed; r3 is only new the first time.
     CHECK_THAT(trace.str(), StartsWith("--- thread 0x1000 \"main\"\n"
-                                       "0x00010000  38600001  li r3, 1\n"
-                                       "0x00010004  4bfffffc  b 0x10000\n"));
+                                       "0x00010000  38600001  li r3, 1  -> r3=0x1\n"
+                                       "0x00010004  4bfffffc  b 0x10000\n"
+                                       "0x00010000  38600001  li r3, 1\n"));
+}
+
+TEST_CASE("the trace shows every kind of register an instruction changes") {
+    std::ostringstream tty;
+    std::ostringstream trace;
+    System system(tty);
+    system.load(make_test_program(
+        {"li r3, -1", "mtctr r3", "cmpwi r3, 0", "addic r4, r3, 1", "vspltisw v2, 1", "mtlr r3"},
+        hello_data()));
+    system.run({.max_instructions = 6, .trace = &trace});
+    CHECK_THAT(trace.str(), ContainsSubstring("mtctr r3  -> ctr=0xffffffffffffffff\n"));
+    CHECK_THAT(trace.str(), ContainsSubstring("cmpwi r3, 0  -> cr=0x80000000\n"));
+    CHECK_THAT(trace.str(), ContainsSubstring("addic r4, r3, 1  -> xer=0x20000000\n"));
+    CHECK_THAT(trace.str(),
+               ContainsSubstring("vspltisw v2, 1  -> v2=00000001000000010000000100000001\n"));
+    CHECK_THAT(trace.str(), ContainsSubstring("mtlr r3  -> lr=0xffffffffffffffff\n"));
 }
 
 TEST_CASE("threads run concurrently and join") {
@@ -263,70 +248,6 @@ TEST_CASE("runs are deterministic") {
 
 // ---- SPU threads ----
 
-namespace {
-
-// Data for a program with one SPU thread. Layout, from 0x20000:
-//   0x00 entry descriptor        0x10 group attributes (no name)   0x20 thread attributes
-//   0x30 sys_spu_image_t         0x40 one copy segment             0x80 group ID, thread ID
-//   0x88 join cause and status   0x90 a quadword the SPU writes    0x100 the SPU program
-std::vector<u8> spu_program_data(const std::vector<std::string_view>& spu_code) {
-    const std::vector<u32> spu_words = spu::assemble(spu_code, 0);
-    std::vector<u32> words(0x100 / 4, 0);
-    words[0] = static_cast<u32>(k_code);
-    words[0x30 / 4 + 2] = static_cast<u32>(k_data + 0x40); // image: segments
-    words[0x30 / 4 + 3] = 1;                               // image: segment count
-    words[0x40 / 4] = lv2::k_spu_segment_copy;
-    words[0x40 / 4 + 2] = static_cast<u32>(4 * spu_words.size());
-    words[0x40 / 4 + 3] = static_cast<u32>(k_data + 0x100);
-    words.insert(words.end(), spu_words.begin(), spu_words.end());
-    return test::words_to_bytes(words);
-}
-
-// Creates a one-thread group, starts it, mails the SPU 42, joins the group, then exits the
-// process with the first word the SPU wrote.
-const std::vector<std::string_view> k_run_spu_thread = {
-    "lis r9, 2",
-    "addi r3, r9, 0x80",
-    "li r4, 1",
-    "li r5, 100",
-    "addi r6, r9, 0x10",
-    "li r11, 170",
-    "sc",
-    "addi r3, r9, 0x84",
-    "lwz r4, 0x80(r9)",
-    "li r5, 0",
-    "addi r6, r9, 0x30",
-    "addi r7, r9, 0x20",
-    "li r8, 0",
-    "li r11, 172",
-    "sc",
-    "lwz r3, 0x80(r9)",
-    "li r11, 173",
-    "sc",
-    "lwz r3, 0x84(r9)",
-    "li r4, 42",
-    "li r11, 190",
-    "sc",
-    "lwz r3, 0x80(r9)",
-    "addi r4, r9, 0x88",
-    "addi r5, r9, 0x8c",
-    "li r11, 178",
-    "sc",
-    "lwz r3, 0x90(r9)",
-    "li r11, 3",
-    "sc",
-};
-
-// Reads the mailbox, adds 1, puts the quadword to 0x20090 by DMA, waits for it, and exits.
-const std::vector<std::string_view> k_spu_add_one = {
-    "rdch $3, $ch29",  "ai $3, $3, 1",    "stqa $3, 0x200", "il $10, 0x200",   "ilhu $11, 0x2",
-    "iohl $11, 0x90",  "il $12, 16",      "il $14, 0x20",   "wrch $ch16, $10", "wrch $ch18, $11",
-    "wrch $ch19, $12", "wrch $ch21, $14", "il $16, 1",      "il $17, 2",       "wrch $ch22, $16",
-    "wrch $ch23, $17", "rdch $5, $ch24",  "wrch $ch28, $3", "stop 0x102",
-};
-
-} // namespace
-
 TEST_CASE("a PPU thread runs an SPU thread and collects its result") {
     std::ostringstream tty;
     System system(tty);
@@ -398,4 +319,183 @@ TEST_CASE("an SPU program calling exit() is told to use spu_thread_exit") {
     CHECK(result.outcome == RunResult::Outcome::faulted);
     CHECK_THAT(result.message, ContainsSubstring("stop 0x2005: exit(5) from the SPU C runtime"));
     CHECK_THAT(result.message, ContainsSubstring("use spu_thread_exit instead"));
+}
+
+// ---- Save states ----
+
+namespace {
+
+// Gets 16 bytes (starting with the nonzero entry descriptor) by DMA, then counts how many times
+// it reads them from the local store before they arrive. Exits with the count. No channel
+// access comes between the reads, so only the DMA's timing decides when the data appears.
+const std::vector<std::string_view> k_spu_poll_dma = {
+    "il $10, 0x200",   "ilhu $11, 0x2",   "il $12, 16",      "il $14, 0x40", "wrch $ch16, $10",
+    "wrch $ch18, $11", "wrch $ch19, $12", "wrch $ch21, $14", "il $6, 0",     "lqa $5, 0x200",
+    "ai $6, $6, 1",    "brz $5, 0x24",    "wrch $ch28, $6",  "stop 0x102",
+};
+
+// Runs a program with one SPU thread to the end, stopping first after `split` instructions if
+// it is set. Returns the guest's output and the final state.
+std::pair<std::string, std::vector<u8>>
+run_spu_program(std::optional<u64> split,
+                const std::vector<std::string_view>& spu_code = k_spu_add_one) {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data(spu_code)));
+    if (split)
+        REQUIRE(system.run({.max_instructions = *split}).outcome ==
+                RunResult::Outcome::instruction_limit);
+    const RunResult result = system.run();
+    REQUIRE(result.outcome == RunResult::Outcome::exited);
+    return {tty.str(), system.save_state()};
+}
+
+} // namespace
+
+TEST_CASE("stopping a run anywhere and continuing changes nothing") {
+    const auto [output, final_state] = run_spu_program(std::nullopt);
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data(k_spu_add_one)));
+    const u64 total = system.run().instructions;
+    REQUIRE(total > 50);
+
+    // Every split point, including those in the middle of SPU turns and DMA transfers.
+    for (u64 split = 1; split < total; ++split) {
+        INFO("split after " << split << " instructions");
+        CHECK(run_spu_program(split).second == final_state);
+    }
+}
+
+TEST_CASE("DMA lands at the same instruction however a turn is split") {
+    // The SPU used to bring DMA up to date only between batches of instructions, so data
+    // appeared later when a run stopped in the middle of a turn.
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data(k_spu_poll_dma)));
+    const RunResult result = system.run();
+    REQUIRE(result.outcome == RunResult::Outcome::exited);
+    const s32 polls = system.kernel().spu_threads().front()->exit_status.value();
+    // The transfer takes 258 cycles (256 to set up, 16 bytes at 8 a cycle). The first read is
+    // one cycle after the command, and each poll takes 3, so the k-th poll sees the data once
+    // 1 + 3 (k - 1) >= 258: k = 87.
+    CHECK(polls == 87);
+
+    const auto [output, final_state] = run_spu_program(std::nullopt, k_spu_poll_dma);
+    for (u64 split = 1; split < result.instructions; split += 7) {
+        INFO("split after " << split << " instructions");
+        CHECK(run_spu_program(split, k_spu_poll_dma).second == final_state);
+    }
+}
+
+TEST_CASE("a saved state continues in a new System as in the original") {
+    const auto [output, final_state] = run_spu_program(std::nullopt);
+
+    for (const u64 split : {1, 15, 30, 50}) {
+        INFO("saved after " << split << " instructions");
+        std::ostringstream tty;
+        System original(tty);
+        original.load(make_test_program(k_run_spu_thread, spu_program_data(k_spu_add_one)));
+        original.run({.max_instructions = split});
+        const std::vector<u8> saved = original.save_state();
+
+        System restored(tty);
+        restored.load_state(saved);
+        CHECK(restored.instructions() == split);
+        CHECK(restored.save_state() == saved);
+        const RunResult result = restored.run();
+        CHECK(result.outcome == RunResult::Outcome::exited);
+        CHECK(result.exit_status == 43);
+        CHECK(restored.save_state() == final_state);
+    }
+}
+
+TEST_CASE("a state that can't be loaded is rejected") {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_hello_and_exit, hello_data()));
+    std::vector<u8> saved = system.save_state();
+
+    SECTION("not a state") {
+        saved[0] = 'X';
+        System fresh(tty);
+        CHECK_THROWS_WITH(fresh.load_state(saved), "not a save state");
+    }
+    SECTION("another version") {
+        saved[8] = 99;
+        System fresh(tty);
+        CHECK_THROWS_WITH(fresh.load_state(saved),
+                          "save state is version 99, but this build reads version 1");
+    }
+    SECTION("truncated") {
+        saved.resize(saved.size() / 2);
+        System fresh(tty);
+        CHECK_THROWS_AS(fresh.load_state(saved), state::Error);
+    }
+    SECTION("extra bytes") {
+        saved.push_back(0);
+        System fresh(tty);
+        CHECK_THROWS_WITH(fresh.load_state(saved), "save state has extra bytes at the end");
+    }
+}
+
+TEST_CASE("loading a state replaces what a System was running") {
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_run_spu_thread, spu_program_data(k_spu_add_one)));
+    system.run({.max_instructions = 20});
+    const std::vector<u8> saved = system.save_state();
+
+    // Run on to the end, then go back.
+    REQUIRE(system.run().outcome == RunResult::Outcome::exited);
+    const std::vector<u8> finished = system.save_state();
+    system.load_state(saved);
+    CHECK(system.save_state() == saved);
+    CHECK(system.instructions() == 20);
+    REQUIRE(system.run().outcome == RunResult::Outcome::exited);
+    CHECK(system.save_state() == finished);
+}
+
+// ---- Debugging ----
+
+TEST_CASE("a breakpoint stops a thread before the instruction, and stepping moves past it") {
+    std::ostringstream reference_tty;
+    System reference(reference_tty);
+    reference.load(make_test_program(k_hello_and_exit, hello_data()));
+    reference.run();
+
+    std::ostringstream tty;
+    System system(tty);
+    system.load(make_test_program(k_hello_and_exit, hello_data()));
+    const std::set<u64> breakpoints = {k_code + 8, k_code + 24}; // addi, then sc
+    const u32 main = system.main_thread().id;
+
+    RunResult result = system.run({.breakpoints = &breakpoints});
+    CHECK(result.outcome == RunResult::Outcome::breakpoint);
+    CHECK(result.thread == main);
+    CHECK(result.instructions == 2);
+    CHECK(system.main_thread().cpu.state.pc == k_code + 8);
+
+    // Running again with the breakpoint still there makes no progress.
+    result = system.run({.breakpoints = &breakpoints});
+    CHECK(result.outcome == RunResult::Outcome::breakpoint);
+    CHECK(result.instructions == 0);
+
+    result = system.run({.step_thread = main});
+    CHECK(result.outcome == RunResult::Outcome::stepped);
+    CHECK(result.instructions == 1);
+    CHECK(system.main_thread().cpu.state.pc == k_code + 12);
+
+    // On to the syscall, then step over it: the kernel handles it within the step.
+    result = system.run({.breakpoints = &breakpoints});
+    CHECK(system.main_thread().cpu.state.pc == k_code + 24);
+    CHECK(tty.str().empty());
+    result = system.run({.step_thread = main});
+    CHECK(result.outcome == RunResult::Outcome::stepped);
+    CHECK(tty.str() == "hi\n");
+
+    result = system.run({.breakpoints = &breakpoints});
+    CHECK(result.outcome == RunResult::Outcome::exited);
+    CHECK(result.exit_status == 7);
+    CHECK(system.save_state() == reference.save_state());
 }

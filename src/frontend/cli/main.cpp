@@ -3,7 +3,10 @@
 #include "common/png.h"
 #include "common/sha1.h"
 #include "core/system.h"
+#include "debug/gdb_server.h"
+#include "debug/trace_diff.h"
 #include "loader/elf.h"
+#include "platform/tcp.h"
 
 #include <charconv>
 #include <filesystem>
@@ -12,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -27,13 +31,53 @@ constexpr std::string_view k_usage = R"(usage:
                             render in software (the default), with Metal (macOS), or not at all
       --frames FILE         write each displayed frame's size and SHA-1 to FILE
       --dump-frames DIR     save each displayed frame as DIR/frame-0001.png, ...
+      --save-state FILE     when the run stops, save the machine's state to FILE
+      --gdb PORT            wait for GDB on localhost:PORT and run under its control
+  ps3emu resume [options] <file.state>
+                            continue a saved state, with the same options as run
+  ps3emu trace-diff <a.trace> <b.trace>
+                            show where two traces (from run --trace) first differ
 )";
 
-// What to do with the frames the program displays.
-struct FrameOutput {
+// What to do besides running: where frames and the final state go.
+struct Outputs {
     std::optional<std::string> hash_file;
     std::optional<std::string> png_directory;
+    std::optional<std::string> state_file;
+    std::optional<u16> gdb_port;
 };
+
+// The GDB server's view of a TCP connection.
+class GdbConnection : public debug::Connection {
+public:
+    explicit GdbConnection(TcpConnection& tcp) : tcp_(tcp) {}
+    std::optional<char> read(bool wait) override { return tcp_.read(wait); }
+    void write(std::string_view bytes) override { tcp_.write(bytes); }
+
+private:
+    TcpConnection& tcp_;
+};
+
+// Runs the program under GDB. Returns its result if it ended, or nothing if GDB killed it.
+// If GDB detaches, the program runs on to its end.
+std::optional<RunResult> run_under_gdb(System& system, const RunOptions& options, u16 port) {
+    std::cerr << "waiting for GDB on localhost:" << port << "\n";
+    std::string error;
+    const auto tcp = TcpConnection::accept_one(port, error);
+    if (!tcp) {
+        std::cerr << "error: cannot listen on port " << port << ": " << error << "\n";
+        return std::nullopt;
+    }
+    GdbConnection connection(*tcp);
+    debug::GdbServer server(system, connection, options);
+    switch (server.serve()) {
+    case debug::GdbServer::End::program_ended: return server.last_result();
+    case debug::GdbServer::End::detached: return system.run(options);
+    case debug::GdbServer::End::killed: break;
+    }
+    std::cerr << "GDB ended the session\n";
+    return std::nullopt;
+}
 
 std::optional<std::vector<u8>> read_file(std::string_view path) {
     std::ifstream stream(std::string(path), std::ios::binary);
@@ -75,8 +119,16 @@ std::string describe_frame(const rsx::Frame& frame) {
     return text;
 }
 
-// `ps3emu run <file>`: runs the program. Exits with the guest's exit status.
-int run_program(std::string_view path, RunOptions options, const FrameOutput& frames) {
+bool write_file(const std::string& path, std::span<const u8> bytes) {
+    std::ofstream stream(path, std::ios::binary);
+    stream.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    return static_cast<bool>(stream);
+}
+
+// `ps3emu run <file>` and `ps3emu resume <file>`: runs the program, from the start or from a
+// saved state. Exits with the guest's exit status.
+int run_program(std::string_view path, bool resume, RunOptions options, const Outputs& outputs) {
     const auto data = read_file(path);
     if (!data) {
         std::cerr << "error: cannot open " << path << "\n";
@@ -85,34 +137,47 @@ int run_program(std::string_view path, RunOptions options, const FrameOutput& fr
 
     System system(std::cout);
     try {
-        system.load(*data);
-    } catch (const loader::LoadError& error) {
+        if (resume) {
+            system.load_state(*data);
+        } else {
+            system.load(*data);
+        }
+    } catch (const std::exception& error) {
+        // loader::LoadError or state::Error
         std::cerr << "error: " << path << ": " << error.what() << "\n";
         return 1;
     }
 
     std::ofstream hashes;
-    if (frames.hash_file) {
-        hashes.open(*frames.hash_file);
+    if (outputs.hash_file) {
+        hashes.open(*outputs.hash_file);
         if (!hashes) {
-            std::cerr << "error: cannot write " << *frames.hash_file << "\n";
+            std::cerr << "error: cannot write " << *outputs.hash_file << "\n";
             return 1;
         }
     }
-    if (frames.png_directory) std::filesystem::create_directories(*frames.png_directory);
+    if (outputs.png_directory) std::filesystem::create_directories(*outputs.png_directory);
     options.on_frame = [&](const rsx::Frame& frame) {
         if (hashes.is_open()) hashes << describe_frame(frame) << "\n";
-        if (!frames.png_directory) return;
-        const auto path = std::filesystem::path(*frames.png_directory) /
+        if (!outputs.png_directory) return;
+        const auto path = std::filesystem::path(*outputs.png_directory) /
                           std::format("frame-{:04}.png", frame.number);
-        const std::vector<u8> png = encode_png(frame.width, frame.height, frame.rgb);
-        std::ofstream(path, std::ios::binary)
-            .write(reinterpret_cast<const char*>(png.data()),
-                   static_cast<std::streamsize>(png.size()));
+        write_file(path.string(), encode_png(frame.width, frame.height, frame.rgb));
     };
 
-    const RunResult result = system.run(options);
+    RunResult result;
+    if (outputs.gdb_port) {
+        const auto ended = run_under_gdb(system, options, *outputs.gdb_port);
+        if (!ended) return 1;
+        result = *ended;
+    } else {
+        result = system.run(options);
+    }
     std::cout.flush();
+    if (outputs.state_file && !write_file(*outputs.state_file, system.save_state())) {
+        std::cerr << "error: cannot write " << *outputs.state_file << "\n";
+        return 1;
+    }
     switch (result.outcome) {
     case RunResult::Outcome::exited: return result.exit_status;
     case RunResult::Outcome::faulted:
@@ -126,6 +191,9 @@ int run_program(std::string_view path, RunOptions options, const FrameOutput& fr
     case RunResult::Outcome::instruction_limit:
         std::cerr << "stopped: reached the limit of " << result.instructions << " instructions\n";
         return 1;
+    case RunResult::Outcome::breakpoint: // only when debugging
+    case RunResult::Outcome::stepped:
+    case RunResult::Outcome::reached: return 1;
     }
     return 1;
 }
@@ -137,9 +205,26 @@ std::optional<u64> parse_count(std::string_view text) {
     return value;
 }
 
-int run_command(const std::vector<std::string_view>& args) {
+// `ps3emu trace-diff <a> <b>`: exits with 0 if the traces are the same, 1 if they differ.
+int run_trace_diff(std::string_view first_path, std::string_view second_path) {
+    std::ifstream first{std::string(first_path)};
+    std::ifstream second{std::string(second_path)};
+    if (!first || !second) {
+        std::cerr << "error: cannot open " << (first ? second_path : first_path) << "\n";
+        return 2;
+    }
+    const auto difference = debug::diff_traces(first, second);
+    if (!difference) {
+        std::cout << "the traces are the same\n";
+        return 0;
+    }
+    std::cout << debug::describe(*difference);
+    return 1;
+}
+
+int run_command(const std::vector<std::string_view>& args, bool resume) {
     RunOptions options;
-    FrameOutput frames;
+    Outputs outputs;
     std::optional<std::string_view> path;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
@@ -163,9 +248,15 @@ int run_command(const std::vector<std::string_view>& args) {
                 return usage_error();
             }
         } else if (args[i] == "--frames" && i + 1 < args.size()) {
-            frames.hash_file = std::string(args[++i]);
+            outputs.hash_file = std::string(args[++i]);
         } else if (args[i] == "--dump-frames" && i + 1 < args.size()) {
-            frames.png_directory = std::string(args[++i]);
+            outputs.png_directory = std::string(args[++i]);
+        } else if (args[i] == "--gdb" && i + 1 < args.size()) {
+            const auto port = parse_count(args[++i]);
+            if (!port || *port == 0 || *port > 0xffff) return usage_error();
+            outputs.gdb_port = static_cast<u16>(*port);
+        } else if (args[i] == "--save-state" && i + 1 < args.size()) {
+            outputs.state_file = std::string(args[++i]);
         } else if (!path && !args[i].starts_with("--")) {
             path = args[i];
         } else {
@@ -173,7 +264,7 @@ int run_command(const std::vector<std::string_view>& args) {
         }
     }
     if (!path) return usage_error();
-    return run_program(*path, options, frames);
+    return run_program(*path, resume, options, outputs);
 }
 
 } // namespace
@@ -184,6 +275,8 @@ int main(int argc, char** argv) {
 
     const std::vector<std::string_view> rest(args.begin() + 1, args.end());
     if (args[0] == "info" && rest.size() == 1) return run_info(rest[0]);
-    if (args[0] == "run") return run_command(rest);
+    if (args[0] == "run") return run_command(rest, false);
+    if (args[0] == "resume") return run_command(rest, true);
+    if (args[0] == "trace-diff" && rest.size() == 2) return run_trace_diff(rest[0], rest[1]);
     return usage_error();
 }

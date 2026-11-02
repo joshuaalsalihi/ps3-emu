@@ -3,6 +3,7 @@
 #include "common/endian.h"
 #include "common/types.h"
 #include "common/vector.h"
+#include "core/state.h"
 #include "cpu/spu/state.h"
 
 #include <concepts>
@@ -48,6 +49,8 @@ public:
 
     std::span<u8> bytes() { return bytes_; }
     std::span<const u8> bytes() const { return bytes_; }
+
+    void serialize(state::Archive& archive) { archive.raw(bytes_); }
 
 private:
     std::vector<u8> bytes_;

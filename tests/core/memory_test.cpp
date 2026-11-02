@@ -1,5 +1,7 @@
 #include "core/memory.h"
 
+#include "core/state.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
@@ -89,4 +91,52 @@ TEST_CASE("a new reservation replaces the old one") {
 
     memory.clear_reservation(1);
     CHECK_FALSE(memory.has_reservation(1, 0x20000));
+}
+
+TEST_CASE("mapping a page again zeroes it") {
+    Memory memory;
+    memory.map(0x10000, 2 * Memory::k_page_size, Memory::k_read_write);
+    memory.write<u32>(0x10ffe, 0xaabbccdd); // across both pages
+    memory.unmap(0x10000, 2 * Memory::k_page_size);
+    memory.map(0x11000, Memory::k_page_size, Memory::k_read_write);
+    CHECK(memory.read<u16>(0x11000) == 0);
+}
+
+TEST_CASE("a save state holds permissions, contents and reservations") {
+    Memory memory;
+    memory.map(0x10000, 2 * Memory::k_page_size, Memory::k_read_write);
+    memory.map(0x20000, Memory::k_page_size, Memory::k_read);
+    memory.write<u32>(0x10ffe, 0xaabbccdd); // across both pages
+    const std::array<u8, 3> bytes = {1, 2, 3};
+    memory.write_bytes(0x10100, bytes);
+    memory.reserve(7, 0x10080);
+
+    state::Archive saver;
+    memory.serialize(saver);
+
+    Memory loaded;
+    state::Archive loader(saver.bytes());
+    loaded.serialize(loader);
+    CHECK(loader.at_end());
+    CHECK(loaded.read<u32>(0x10ffe) == 0xaabbccdd);
+    CHECK(loaded.read<u8>(0x10102) == 3);
+    CHECK(loaded.is_accessible(0x20000, 4, Memory::k_read));
+    CHECK_FALSE(loaded.is_accessible(0x20000, 4, Memory::k_write));
+    CHECK_FALSE(loaded.is_accessible(0x12000, 4, Memory::k_read));
+    CHECK(loaded.has_reservation(7, 0x10080));
+
+    // Only the two written pages are stored, not every mapped one.
+    CHECK(saver.bytes().size() < 3 * Memory::k_page_size);
+
+    // Loading replaces what was there.
+    Memory used;
+    used.map(0x30000, Memory::k_page_size, Memory::k_read_write);
+    used.write<u32>(0x30000, 1);
+    used.map(0x10000, Memory::k_page_size, Memory::k_read_write);
+    used.write<u32>(0x10000, 1);
+    state::Archive again(saver.bytes());
+    used.serialize(again);
+    CHECK_FALSE(used.is_accessible(0x30000, 4, Memory::k_read));
+    CHECK(used.read<u32>(0x10000) == 0);
+    CHECK(used.read<u32>(0x10ffe) == 0xaabbccdd);
 }

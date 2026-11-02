@@ -3,6 +3,7 @@
 #include "common/types.h"
 #include "core/clock.h"
 #include "core/memory.h"
+#include "core/state.h"
 #include "cpu/ppu/state.h"
 
 #include <optional>
@@ -12,15 +13,18 @@ namespace ppu {
 
 // Why the interpreter handed control back.
 enum class StopReason {
-    syscall,  // `sc`: the kernel must handle a system call
-    hle_call, // `hle`: an emulated library function must run
-    trap,     // a trap instruction fired
-    fault,    // illegal instruction or bad memory access
+    syscall,    // `sc`: the kernel must handle a system call
+    hle_call,   // `hle`: an emulated library function must run
+    trap,       // a trap instruction fired
+    fault,      // illegal instruction or bad memory access
+    breakpoint, // a debugger breakpoint: pc is on it, and it hasn't executed
 };
 
 struct Stop {
-    StopReason reason;
+    StopReason reason = StopReason::fault;
     std::string message;
+
+    void serialize(state::Archive& archive) { archive(reason, message); }
 };
 
 // A guest PPU thread: its registers, plus what instruction handlers need to reach.
@@ -45,6 +49,8 @@ struct Thread {
     u64& gpr(u32 n) { return state.gpr[n]; }
     // (rA|0) from the manuals: register rA, or the value 0 when rA is r0.
     u64 gpr_or_zero(u32 n) const { return n == 0 ? 0 : state.gpr[n]; }
+
+    void serialize(state::Archive& archive) { archive(state, next_pc, stop, vmx_graphics_mode); }
 };
 
 } // namespace ppu

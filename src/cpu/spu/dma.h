@@ -12,6 +12,7 @@
 #include "common/types.h"
 #include "core/clock.h"
 #include "core/memory.h"
+#include "core/state.h"
 #include "cpu/spu/local_store.h"
 
 #include <deque>
@@ -69,6 +70,8 @@ struct DmaParameters {
     u64 ea = 0;   // effective address (MFC_EAH:MFC_EAL); for lists, EAL is the list's address
     u32 size = 0; // transfer size, or list size in bytes (MFC_Size)
     u32 tag = 0;  // tag group, 0-31 (MFC_TagID)
+
+    void serialize(state::Archive& archive) { archive(lsa, ea, size, tag); }
 };
 
 class Dma {
@@ -110,6 +113,11 @@ public:
     // Set when a command is invalid or touches memory it can't; the SPU should stop.
     const std::optional<std::string>& error() const { return error_; }
 
+    void serialize(state::Archive& archive) {
+        archive(instant, queue_, engine_free_at_, issued_count_, completed_count_, new_stalls_,
+                reserved_line_, error_);
+    }
+
 private:
     struct Command {
         u32 opcode = 0;
@@ -122,6 +130,11 @@ private:
         u32 next_element = 0; // where to resume after a stall
         u32 list_lsa = 0;     // the local store address for the next element
         bool stalled = false; // waiting for acknowledgment
+
+        void serialize(state::Archive& archive) {
+            archive(opcode, parameters, issued_at, cost, finish, element_count, next_element,
+                    list_lsa, stalled);
+        }
     };
 
     struct ListElement {

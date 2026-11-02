@@ -83,6 +83,13 @@ struct SpuThread {
     // receiving, by binding number. These outlast restarts of the group.
     std::array<u32, k_spu_event_port_count> event_ports{};
     std::map<u32, u32> bound_queues;
+
+    // The SPE, which needs the kernel's memory and clock, is saved by the kernel.
+    void serialize(state::Archive& archive) {
+        archive(id, name, group, index, status, blocked_channel, waiting_queue, wait_sequence,
+                initial_local_store, entry, arguments, needs_reload, exit_status, event_ports,
+                bound_queues);
+    }
 };
 
 struct SpuThreadGroup : KernelObject {
@@ -98,9 +105,16 @@ struct SpuThreadGroup : KernelObject {
     struct Exit {
         u32 cause = 0;
         s32 status = 0;
+
+        void serialize(state::Archive& archive) { archive(cause, status); }
     };
     std::optional<Exit> exit;
     bool has_joiner = false;
+
+    ObjectKind kind() const override { return ObjectKind::spu_thread_group; }
+    void serialize(state::Archive& archive) override {
+        archive(name, size, priority, threads, status, exit, has_joiner);
+    }
 };
 
 } // namespace lv2

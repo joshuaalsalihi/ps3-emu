@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.11 · 2026-11-01 · M5 complete
+**Status:** Draft v0.12 · 2026-11-01 · M6 complete
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -194,6 +194,9 @@ interpreter. On macOS it needs `MAP_JIT` memory and the `allow-jit` entitlement.
   RSX will join the same loop.
 - A **virtual clock** counts guest cycles. The timebase, sleeps, timeouts and
   `sys_time_get_current_time` all come from it, never from the host clock.
+- A run can stop after any instruction (at an instruction limit, a breakpoint or a save) and
+  continue later. The turn in progress is part of the machine's state, so where a run stops never
+  changes what the guest sees.
 
 **PPU threads (implemented in M2):**
 - The LV2 kernel picks threads round-robin in creation order. Each turn lasts 1,000 instructions or
@@ -210,7 +213,8 @@ interpreter. On macOS it needs `MAP_JIT` memory and the `allow-jit` entitlement.
 - They take turns with the PPU threads: one rotation covers the PPU threads in creation order,
   then the SPU threads. Each turn lasts 1,000 instructions or until the SPU stops or stalls.
 - A stalled SPU thread waits until its channel's count is no longer 0. Before each turn, the
-  kernel lets every SPU's DMA progress and wakes the threads that can continue.
+  kernel lets every SPU's DMA progress and wakes the threads that can continue. A running SPU's
+  own DMA is brought up to date before each of its instructions.
 - A wait on DMA or the decrementer is a timeout like any other: when every thread is waiting, the
   clock jumps to the next DMA completion. Waits on mailboxes, signals and event queues have no
   deadline, so a program that never sends one deadlocks, and the report names the SPU's channel
@@ -398,13 +402,40 @@ everything above.
 
 ## 12. Debugging
 
-- **GDB** is the only debugger. We implement the GDB remote protocol for PPU threads.
+- **GDB** is the only debugger. `ps3emu run --gdb PORT` serves the GDB remote protocol
+  (`debug/gdb_server.h`) on the loopback address. GDB sees each PPU thread, with the 64-bit
+  PowerPC registers, floating point and VMX (described to GDB in a target description), and can
+  read and write registers and memory (code included), set breakpoints, step, continue, and
+  interrupt with Ctrl-C. Watchpoints aren't supported yet.
+- Stopping a run anywhere changes nothing the guest sees (§6), so a program behaves the same
+  under GDB as without it. Stepping a thread runs the other threads as the scheduler would.
 - Current GDB releases no longer support the SPU architecture, so SPU state is exposed through
-  GDB `monitor` commands (e.g. `monitor spu regs 0`, `monitor spu ls 0 0x100 64`).
-- **Tracing:** instructions (filterable by address), syscalls, HLE calls, DMA and RSX commands.
-  A CLI tool diffs two traces.
+  GDB `monitor` commands: `monitor spu` lists SPU threads, `monitor spu regs 0` shows one's
+  registers, `monitor spu ls 0 0x100 64` its local store. `monitor save-state FILE` saves the
+  machine.
+- **Replay** (going back in time): GDB's `reverse-stepi` and `reverse-continue` work. The
+  server saves a checkpoint every million instructions (keeping at most 32, thinned out the
+  further back they go); going back restores the latest checkpoint before the target and runs
+  forward to it, which determinism makes exact. Console output and frames aren't repeated when
+  a replay passes them again. A change made from GDB (registers or memory) can't be replayed,
+  so going back stops there. Input devices don't exist yet; when they do, their input will be
+  recorded in a replay log (§4) so runs that use it replay too.
+- PS3 ELF symbols such as `main` name function descriptors, and GDB breaks on the descriptor
+  rather than the code. Break on the code address the descriptor holds instead:
+  `break *(*(unsigned long *)&main)`.
+- **Tracing:** instructions with the registers each one changed, syscalls, HLE calls, channel
+  accesses and RSX commands. `ps3emu trace-diff` reports the first line where two traces
+  differ, with the thread running there and the lines before it. Since runs are deterministic,
+  that line is where two builds (or two sets of options) first disagree. Later: filtering by
+  address.
 - **Logging:** per subsystem; unimplemented functions are always logged.
-- **Save states:** a full `System` snapshot.
+- **Save states:** a full `System` snapshot (`core/state.h`). Each type lists its fields once,
+  in a `serialize` function used for both saving and loading. A state holds memory (only the
+  pages written since they were mapped), the clock, the kernel's threads and objects, the HLE
+  bindings and the RSX; GPU backends hold no guest state. States are little-endian and versioned,
+  and loading rejects one from another version. `ps3emu run --save-state FILE` saves when a run
+  stops; `ps3emu resume FILE` continues it. Each example also runs as a test split in two
+  processes around a save.
 
 ---
 
@@ -423,7 +454,7 @@ src/
   rsx/         FIFO, state, shader IR, surfaces, texture decoding
   gpu/         backends: reference (software), null, metal
   vfs/  audio/  input/  platform/
-  debug/       tracing, GDB server, snapshots
+  debug/       trace diffing, GDB server
   frontend/    CLI
 examples/      guest programs (assembly, C, PSL1GHT) that run as integration tests
 tests/         unit tests, mirroring src/; shared fixtures in tests/support/
@@ -447,7 +478,7 @@ ASan/UBSan.
 | M3 ✅ | PPU float + vector | FPU and VMX tests pass, including flags. |
 | M4 ✅ | SPU | SPU instructions, channels, mailboxes, DMA and atomics pass tests. |
 | M5 ✅ | First pixels | FIFO + state model; the reference backend draws a PSL1GHT triangle matching its golden hash, and Metal draws it within tolerance of the reference. |
-| M6 | Debugging | GDB server, trace diff, save states, replay. |
+| M6 ✅ | Debugging | GDB server, trace diff, save states, replay. |
 | M7 | Shaders + textures | Homebrew 3D samples render correctly. |
 | M8 | Firmware | Fake-signed SELF, LLE libraries from user firmware, `/dev_flash`. |
 | M9 | Commercial | A simple commercial game reaches its first frame (research goal). |

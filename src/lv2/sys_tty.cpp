@@ -26,8 +26,7 @@ void sys_tty_write(Kernel& kernel, PpuThread& thread) {
     std::vector<u8> bytes(length);
     kernel.memory.read_bytes(buffer, bytes);
     if (written_out != 0) kernel.memory.write<u32>(written_out, length);
-    kernel.tty.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(length));
+    kernel.write_tty(bytes);
     thread.set_result(k_ok);
 }
 
