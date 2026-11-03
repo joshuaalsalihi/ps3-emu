@@ -523,6 +523,33 @@ ASan/UBSan.
 | M8 | Firmware | Fake-signed SELF, LLE libraries from user firmware, `/dev_flash`. |
 | M9 | Commercial | A simple commercial game reaches its first frame (research goal). |
 
+### What M7 still lacks
+
+The homebrew samples render (`rsx_cube`, `rsx_scene` and PSL1GHT's own `rsxtest`), but the RSX
+has gaps a wider range of programs will hit. Most end the run with a clear "not supported yet"
+error; the first two don't, and should be fixed or made to fail first.
+
+- **Silently ignored:** immediate-mode vertex data (`rsxDrawVertex*`, the VTX_ATTR methods)
+  and inline index arrays (`rsxDrawInlineIndexArray*`). A draw that uses them draws nothing.
+- **Geometry:** clipping, so no vertex may be behind the viewer (w <= 0) or far outside the
+  viewport; points, lines and point sprites; user clip planes; polygon offset.
+- **Vertex programs:** conditional execution, the address register (ARL, relative constant
+  indexing), branches and subroutines, texture lookups, and the scalar operations beyond MOV,
+  RCP and RSQ (EXP, LOG, LIT, EX2, LG2, SIN, COS, RCC); SSG, ARR and ARA. Vertex attributes
+  in formats other than 32-bit float and unsigned byte (half float, 16-bit, packed).
+- **Fragment programs:** flow control (IF, LOOP, REP, CAL, RET), output scaling, writing depth,
+  SIN, COS, LIT/LITEX2, DP2A, TXD, DIVRSQ, the pack and unpack instructions, two-sided colors
+  (the FACING input), and H registers sharing storage with R registers.
+- **Textures:** compressed (DXT1/3/5), cube, 3D, float, depth (with shadow comparison) and the
+  remaining formats; anisotropic filtering and convolution; vertex textures.
+- **Render targets:** stencil, logic operations, several color targets (MRT), color formats
+  besides (X|A)8R8G8B8, swizzled targets, multisampling and depth bounds.
+- **Transfers:** only an image from the CPU into a 32-bit 2D surface; not memory-to-memory
+  copies, scaled images or blits, nor other subchannels.
+- **Libraries:** pad input (`sys_io`), so `rsxtest` can't be quit; sysutil callbacks.
+- **Speed:** the reference renderer takes about 40 seconds per 720p frame of `rsxtest` in a
+  debug build.
+
 ---
 
 ## 15. Open questions
