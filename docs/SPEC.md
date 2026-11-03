@@ -334,9 +334,10 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   texture lookups can compare neighbors; lanes outside the triangle still run, as helpers.
 - **Draws:** BEGIN_END with DRAW_ARRAYS or an index array (16- or 32-bit) collects vertex
   indices; ending the primitive builds a draw request (vertex arrays, both programs, viewport,
-  render target, depth test, culling, textures). Triangles, strips and fans into one color
-  target, with no blending yet; enabling something unsupported ends the run with a clear "not
-  supported yet" error.
+  render target, alpha test, depth test, blending, culling, textures). Triangles, strips and
+  fans into one color target; stencil tests, logic operations and several targets aren't
+  supported yet, and enabling them ends the run with a clear "not supported yet" error.
+  Registers a program never writes start as OpenGL's defaults (UNVERIFIED for the RSX).
 - **Reference rasterization:** vertices go through the vertex program, the perspective divide
   and the viewport transform, then snap to 1/16 pixel. Coverage is decided with integer edge
   functions at pixel centers and a top-left fill rule, so triangles sharing an edge never both
@@ -347,6 +348,11 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   takes the eight usual comparisons, with writes optional. Culling judges a triangle's winding
   as it appears on the display (libgcm sets a top-left window origin), so the usual OpenGL-style
   setup (counterclockwise front faces, a viewport that flips y) culls the back faces.
+- **Alpha test and blending:** OpenGL's. The alpha test compares the fragment's alpha as an
+  8-bit value with the reference, and a fragment that fails writes neither color nor depth.
+  Blending takes all of OpenGL's factors (constant color included) and its five equations, on
+  colors clamped to 0..1, computed exactly and then rounded to 8 bits; a target without alpha
+  reads its alpha as 1.
 - **Textures** (`gpu/texture.h`): 2D textures in the 16- and 32-bit color formats, linear or
   swizzled (Morton order), with mipmaps, the channel remap, normalized or texel coordinates,
   repeat, mirrored repeat, clamp-to-edge and border wrapping, and nearest, linear and mipmapped
@@ -368,10 +374,12 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   match the reference's last-vertex rule. Clears are memory fills, shared with the reference.
   Textures are decoded the reference's way and uploaded as RGBA8; the depth buffer round-trips
   through guest memory like the color target (Z24 as 32-bit floats, which Apple GPUs need).
+  Blending is Metal's own, and the alpha test a `discard_fragment` in the translated shader.
   On the test machine the PSL1GHT triangle's frame is bit-identical to the reference. In the
   cubes' frames 13-16% of the cubes' pixels differ, nearly all by one step; 1-3% differ by more,
   along texel edges (Metal filters in lower precision) and at silhouettes (Metal snaps vertices
-  more finely).
+  more finely). In `rsx_scene`'s, 15% of the view's pixels differ, and 0.07% by more than one
+  step.
 
 ---
 
@@ -401,8 +409,8 @@ everything above.
 - Instruction unit tests: inputs → expected outputs and flags, for every instruction.
 - Example programs (`examples/`): small guest programs built with LLVM, whose output must match a
   `.expected` file exactly, and PSL1GHT programs (threads, floats, SPU threads with mailboxes,
-  DMA, atomics, event queues and `spu_printf`, and graphics: a clear, a triangle and textured
-  cubes, checked by frame hashes). Later: an audio tone, with audio hashes.
+  DMA, atomics, event queues and `spu_printf`, and graphics: a clear, a triangle, textured
+  cubes and a scene with mipmaps, alpha testing and blending, checked by frame hashes). Later: an audio tone, with audio hashes.
 - Determinism tests: two runs must produce identical state hashes.
 - CI runs everything headless, using the `Null` GPU backend.
 
@@ -548,7 +556,8 @@ ASan/UBSan.
 15. The RSX's depth and texture details: how depth is clamped and rounded; how winding is judged
     for culling; how the derivatives within a quad pair up; the texture swizzle for
     non-square sizes and where a linear texture's smaller mipmap levels go; whether the border
-    color is remapped; and the precision of its filtering (ours is exact arithmetic).
+    color is remapped; the precision of its filtering and blending (ours are exact arithmetic);
+    and the registers' values before a program first writes them.
 
 ---
 

@@ -205,6 +205,8 @@ std::optional<std::string> fragment_expression(u32 opcode) {
     }
 }
 
+using Textures = std::array<std::optional<rsx::Texture>, rsx::k_texture_units>;
+
 std::optional<std::string> translate_fragment(const rsx::fragment::Program& program,
                                               const Textures& textures, std::string& body) {
     for (const rsx::fragment::Instruction& in : program) {
@@ -234,12 +236,33 @@ std::optional<std::string> translate_fragment(const rsx::fragment::Program& prog
     return std::nullopt;
 }
 
+// Discards the fragment unless its alpha, as an 8-bit value, passes the alpha test.
+std::string alpha_test(const std::optional<rsx::AlphaTest>& test) {
+    if (!test) return "";
+    const char* comparison = "";
+    switch (test->compare) {
+    case rsx::Compare::never: comparison = "false &&"; break;
+    case rsx::Compare::less: comparison = "<"; break;
+    case rsx::Compare::equal: comparison = "=="; break;
+    case rsx::Compare::less_equal: comparison = "<="; break;
+    case rsx::Compare::greater: comparison = ">"; break;
+    case rsx::Compare::not_equal: comparison = "!="; break;
+    case rsx::Compare::greater_equal: comparison = ">="; break;
+    case rsx::Compare::always: return "";
+    }
+    return std::format("    uint alpha = uint(rint(saturate(r[0].w) * 255.0));\n"
+                       "    if (!(alpha {} {}u)) discard_fragment();\n",
+                       comparison, test->reference);
+}
+
 } // namespace
 
-MslTranslation translate_to_msl(const std::vector<rsx::vertex::Instruction>& vertex_program,
-                                const rsx::fragment::Program& fragment_program, bool flat_shading,
-                                const Textures& textures) {
+MslTranslation translate_to_msl(const rsx::DrawRequest& request) {
     using namespace rsx;
+    const auto& vertex_program = request.vertex_program.instructions;
+    const auto& fragment_program = request.fragment_program;
+    const auto& textures = request.textures;
+    const bool flat_shading = request.flat_shading;
     MslTranslation translation;
     std::string vertex_body;
     std::string fragment_body;
@@ -311,12 +334,13 @@ vertex Varyings vertex_main(uint id [[vertex_id]], device const float4* inputs [
 fragment float4 fragment_main(Varyings in [[stage_in]]{}) {{
     float4 f[{}] = {{}};
 {}    float4 r[{}] = {{}};
-{}    return r[0];
+{}{}    return r[0];
 }}
 )",
         varyings, vertex::k_input_count, vertex::k_input_count, vertex::k_input_count,
         vertex::k_temp_count, vertex::k_output_count, vertex_body, copy_outputs, texture_parameters,
-        fragment::k_input_count, fragment_inputs, fragment::k_temp_count, fragment_body);
+        fragment::k_input_count, fragment_inputs, fragment::k_temp_count, fragment_body,
+        alpha_test(request.alpha_test));
     return translation;
 }
 

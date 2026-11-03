@@ -88,6 +88,52 @@ struct DepthTest {
 
 enum class Cull { none, front, back, front_and_back };
 
+// Drops fragments whose alpha, as an 8-bit value, fails the comparison with `reference`.
+struct AlphaTest {
+    Compare compare = Compare::always;
+    u32 reference = 0; // 0..255
+};
+
+// Blend factors and equations, as OpenGL defines them. PSL1GHT, rsx/gcm_sys.h: GCM_ZERO ...,
+// GCM_FUNC_ADD ...
+enum class BlendFactor : u32 {
+    zero = 0,
+    one = 1,
+    source_color = 0x300,
+    one_minus_source_color = 0x301,
+    source_alpha = 0x302,
+    one_minus_source_alpha = 0x303,
+    destination_alpha = 0x304,
+    one_minus_destination_alpha = 0x305,
+    destination_color = 0x306,
+    one_minus_destination_color = 0x307,
+    source_alpha_saturate = 0x308,
+    constant_color = 0x8001,
+    one_minus_constant_color = 0x8002,
+    constant_alpha = 0x8003,
+    one_minus_constant_alpha = 0x8004,
+};
+
+enum class BlendEquation : u32 {
+    add = 0x8006,
+    minimum = 0x8007,
+    maximum = 0x8008,
+    subtract = 0x800a,         // source - destination
+    reverse_subtract = 0x800b, // destination - source
+};
+
+// Combines each fragment's color (the source) with the pixel's (the destination):
+// equation(source * source factor, destination * destination factor), per channel.
+struct Blend {
+    BlendFactor source_rgb = BlendFactor::one;
+    BlendFactor source_alpha = BlendFactor::one;
+    BlendFactor destination_rgb = BlendFactor::zero;
+    BlendFactor destination_alpha = BlendFactor::zero;
+    BlendEquation equation_rgb = BlendEquation::add;
+    BlendEquation equation_alpha = BlendEquation::add;
+    u32 color = 0; // the constant color, A8R8G8B8
+};
+
 // Texture formats we decode: the low 5 bits of the format byte. PSL1GHT, rsx/gcm_sys.h:
 // GCM_TEXTURE_FORMAT_*. The D formats have no alpha channel: alpha reads as 1.
 enum class TextureFormat : u32 {
@@ -140,7 +186,7 @@ struct Texture {
     s32 lod_bias = 0;
 };
 
-// Draws primitives into one color surface, with no blending (yet).
+// Draws primitives into one color surface.
 struct DrawRequest {
     Primitive primitive = Primitive::triangles;
     std::vector<u32> vertices; // vertex indices, in the order they make primitives
@@ -153,7 +199,9 @@ struct DrawRequest {
     ColorSurface target;
     u32 color_mask = 0; // method::k_color_mask
     bool flat_shading = false;
+    std::optional<AlphaTest> alpha_test;
     std::optional<DepthTest> depth_test; // none: no depth test, and no depth writes
+    std::optional<Blend> blend;
     Cull cull = Cull::none;
     // Whether counterclockwise triangles face the viewer, as they appear on the display.
     bool front_ccw = true;

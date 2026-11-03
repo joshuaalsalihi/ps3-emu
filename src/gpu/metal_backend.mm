@@ -21,8 +21,11 @@ namespace gpu {
 struct MetalBackend::Device {
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
-    // Compiled pipelines by their shader source, color write mask and depth format.
-    std::map<std::tuple<std::string, MTLColorWriteMask, MTLPixelFormat>, id<MTLRenderPipelineState>>
+    // Compiled pipelines by their shader source, color write mask, depth format and blending
+    // (factors and equations).
+    std::map<std::tuple<std::string, MTLColorWriteMask, MTLPixelFormat,
+                        std::optional<std::array<u32, 6>>>,
+             id<MTLRenderPipelineState>>
         pipelines;
 };
 
@@ -100,6 +103,52 @@ MTLCompareFunction compare_function(rsx::Compare compare) {
 }
 
 constexpr float k_z24_maximum = 16777215.0f;
+
+MTLBlendFactor blend_factor(rsx::BlendFactor factor) {
+    using rsx::BlendFactor;
+    switch (factor) {
+    case BlendFactor::zero: return MTLBlendFactorZero;
+    case BlendFactor::one: return MTLBlendFactorOne;
+    case BlendFactor::source_color: return MTLBlendFactorSourceColor;
+    case BlendFactor::one_minus_source_color: return MTLBlendFactorOneMinusSourceColor;
+    case BlendFactor::source_alpha: return MTLBlendFactorSourceAlpha;
+    case BlendFactor::one_minus_source_alpha: return MTLBlendFactorOneMinusSourceAlpha;
+    case BlendFactor::destination_alpha: return MTLBlendFactorDestinationAlpha;
+    case BlendFactor::one_minus_destination_alpha: return MTLBlendFactorOneMinusDestinationAlpha;
+    case BlendFactor::destination_color: return MTLBlendFactorDestinationColor;
+    case BlendFactor::one_minus_destination_color: return MTLBlendFactorOneMinusDestinationColor;
+    case BlendFactor::source_alpha_saturate: return MTLBlendFactorSourceAlphaSaturated;
+    case BlendFactor::constant_color: return MTLBlendFactorBlendColor;
+    case BlendFactor::one_minus_constant_color: return MTLBlendFactorOneMinusBlendColor;
+    case BlendFactor::constant_alpha: return MTLBlendFactorBlendAlpha;
+    case BlendFactor::one_minus_constant_alpha: return MTLBlendFactorOneMinusBlendAlpha;
+    }
+    return MTLBlendFactorOne;
+}
+
+MTLBlendOperation blend_operation(rsx::BlendEquation equation) {
+    switch (equation) {
+    case rsx::BlendEquation::add: return MTLBlendOperationAdd;
+    case rsx::BlendEquation::subtract: return MTLBlendOperationSubtract;
+    case rsx::BlendEquation::reverse_subtract: return MTLBlendOperationReverseSubtract;
+    case rsx::BlendEquation::minimum: return MTLBlendOperationMin;
+    case rsx::BlendEquation::maximum: return MTLBlendOperationMax;
+    }
+    return MTLBlendOperationAdd;
+}
+
+bool reads_destination_alpha(const rsx::Blend& blend) {
+    using rsx::BlendFactor;
+    for (const BlendFactor factor :
+         {blend.source_rgb, blend.source_alpha, blend.destination_rgb, blend.destination_alpha}) {
+        if (factor == BlendFactor::destination_alpha ||
+            factor == BlendFactor::one_minus_destination_alpha ||
+            factor == BlendFactor::source_alpha_saturate) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Uploads a texture's levels, decoded (and remapped) the reference backend's way, as RGBA8.
 id<MTLTexture> upload_texture(id<MTLDevice> device, const Memory& memory,
@@ -214,9 +263,12 @@ MetalBackend::~MetalBackend() = default;
 
 std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
     if (request.cull == rsx::Cull::front_and_back) return std::nullopt; // nothing is drawn
-    const MslTranslation msl =
-        translate_to_msl(request.vertex_program.instructions, request.fragment_program,
-                         request.flat_shading, request.textures);
+    // The texture holds an X8 target's X byte as alpha, where the reference reads 1.
+    if (request.blend && reads_destination_alpha(*request.blend) &&
+        request.target.format == rsx::ColorFormat::x8r8g8b8_z8r8g8b8) {
+        return "Metal can't blend with the destination alpha of an X8R8G8B8 (Z) target yet";
+    }
+    const MslTranslation msl = translate_to_msl(request);
     if (msl.error) return msl.error;
 
     // The pipeline: compile the shaders the first time this program, mask and depth format are
@@ -228,8 +280,15 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
                            ? MTLPixelFormatDepth16Unorm
                            : MTLPixelFormatDepth32Float;
     }
+    std::optional<std::array<u32, 6>> blend_key;
+    if (const auto& blend = request.blend) {
+        blend_key = {
+            static_cast<u32>(blend->source_rgb),      static_cast<u32>(blend->source_alpha),
+            static_cast<u32>(blend->destination_rgb), static_cast<u32>(blend->destination_alpha),
+            static_cast<u32>(blend->equation_rgb),    static_cast<u32>(blend->equation_alpha)};
+    }
     __strong id<MTLRenderPipelineState>& pipeline =
-        device_->pipelines[{msl.source, mask, depth_format}];
+        device_->pipelines[{msl.source, mask, depth_format, blend_key}];
     if (!pipeline) {
         MTLCompileOptions* options = [MTLCompileOptions new];
         options.mathMode = MTLMathModeSafe;
@@ -245,6 +304,16 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
         descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
         descriptor.colorAttachments[0].writeMask = mask;
         descriptor.depthAttachmentPixelFormat = depth_format;
+        if (const auto& blend = request.blend) {
+            MTLRenderPipelineColorAttachmentDescriptor* color = descriptor.colorAttachments[0];
+            color.blendingEnabled = YES;
+            color.sourceRGBBlendFactor = blend_factor(blend->source_rgb);
+            color.sourceAlphaBlendFactor = blend_factor(blend->source_alpha);
+            color.destinationRGBBlendFactor = blend_factor(blend->destination_rgb);
+            color.destinationAlphaBlendFactor = blend_factor(blend->destination_alpha);
+            color.rgbBlendOperation = blend_operation(blend->equation_rgb);
+            color.alphaBlendOperation = blend_operation(blend->equation_alpha);
+        }
         pipeline = [device_->device newRenderPipelineStateWithDescriptor:descriptor error:&error];
         if (!pipeline) return "Metal pipeline creation failed: " + describe(error);
     }
@@ -386,6 +455,13 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
     }
     [encoder
         setFrontFacingWinding:request.front_ccw ? MTLWindingCounterClockwise : MTLWindingClockwise];
+    if (request.blend) {
+        const u32 color = request.blend->color;
+        [encoder setBlendColorRed:static_cast<float>((color >> 16) & 0xff) / 255.0f
+                            green:static_cast<float>((color >> 8) & 0xff) / 255.0f
+                             blue:static_cast<float>(color & 0xff) / 255.0f
+                            alpha:static_cast<float>(color >> 24) / 255.0f];
+    }
     for (u32 unit = 0; unit < request.textures.size(); ++unit) {
         if (!request.textures[unit]) continue;
         std::string error;

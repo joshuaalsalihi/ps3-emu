@@ -22,10 +22,10 @@ flips to the display.
 - **Kernel:** the PS3 kernel (LV2) and its core system library are emulated at a high level,
   with deterministic thread scheduling on a virtual clock.
 - **RSX:** the GPU's command FIFO and register state, display setup through libgcm, clears,
-  flips, and 3D drawing: vertex and fragment programs, index arrays, depth testing, face
-  culling and filtered, mipmapped textures. A software reference renderer produces exact,
-  host-independent frames, which can be saved as PNGs or checked by hash; on macOS, Metal draws
-  the same frames on the GPU. Blending comes next.
+  flips, and 3D drawing: vertex and fragment programs, index arrays, depth and alpha testing,
+  blending, face culling and filtered, mipmapped textures. A software reference renderer
+  produces exact, host-independent frames, which can be saved as PNGs or checked by hash; on
+  macOS, Metal draws the same frames on the GPU.
 - **Debugging:** a GDB server (breakpoints, stepping, registers and memory, SPU inspection
   through `monitor` commands, and going back in time with `reverse-stepi` and
   `reverse-continue`), save states, and traces that show each instruction's results and can be

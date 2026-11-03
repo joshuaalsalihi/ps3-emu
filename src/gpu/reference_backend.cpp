@@ -147,6 +147,77 @@ QuadInputs interpolate(const rsx::DrawRequest& request, const Triangle& triangle
     return result;
 }
 
+// A color channel clamped to 0..1 and rounded to 8 bits. UNVERIFIED: to nearest.
+u32 to_8_bits(Float channel) {
+    return static_cast<u32>(to_integer(multiply(rsx::shader_ops::saturate(channel), k_255)));
+}
+
+// An A8R8G8B8 value as red, green, blue and alpha in 0..1.
+Vec4 unpack(u32 argb) {
+    const auto channel = [&](u32 shift) {
+        return divide(from_integer((argb >> shift) & 0xff), k_255);
+    };
+    return {channel(16), channel(8), channel(0), channel(24)};
+}
+
+Float factor_value(rsx::BlendFactor factor, int channel, const Vec4& source,
+                   const Vec4& destination, const Vec4& constant) {
+    using rsx::BlendFactor;
+    const auto one_minus = [](Float value) { return add(k_one, value ^ rsx::shader_ops::k_sign); };
+    switch (factor) {
+    case BlendFactor::zero: return k_zero;
+    case BlendFactor::one: return k_one;
+    case BlendFactor::source_color: return source[channel];
+    case BlendFactor::one_minus_source_color: return one_minus(source[channel]);
+    case BlendFactor::source_alpha: return source[3];
+    case BlendFactor::one_minus_source_alpha: return one_minus(source[3]);
+    case BlendFactor::destination_alpha: return destination[3];
+    case BlendFactor::one_minus_destination_alpha: return one_minus(destination[3]);
+    case BlendFactor::destination_color: return destination[channel];
+    case BlendFactor::one_minus_destination_color: return one_minus(destination[channel]);
+    case BlendFactor::source_alpha_saturate:
+        return channel == 3 ? k_one : minimum(source[3], one_minus(destination[3]));
+    case BlendFactor::constant_color: return constant[channel];
+    case BlendFactor::one_minus_constant_color: return one_minus(constant[channel]);
+    case BlendFactor::constant_alpha: return constant[3];
+    case BlendFactor::one_minus_constant_alpha: return one_minus(constant[3]);
+    }
+    return k_zero;
+}
+
+// OpenGL's blending, on colors clamped to 0..1. A target without alpha reads its alpha as 1.
+// UNVERIFIED: the RSX blends 8-bit targets in fixed point; this is exact arithmetic.
+Vec4 blend(const rsx::Blend& blend, const Vec4& color, Vec4 destination, bool has_alpha) {
+    using rsx::BlendEquation;
+    if (!has_alpha) destination[3] = k_one;
+    Vec4 source;
+    for (int i = 0; i < 4; ++i) {
+        source[i] = rsx::shader_ops::saturate(color[i]);
+    }
+    const Vec4 constant = unpack(blend.color);
+    Vec4 result;
+    for (int i = 0; i < 4; ++i) {
+        const bool alpha = i == 3;
+        const Float s =
+            multiply(source[i], factor_value(alpha ? blend.source_alpha : blend.source_rgb, i,
+                                             source, destination, constant));
+        const Float d = multiply(
+            destination[i], factor_value(alpha ? blend.destination_alpha : blend.destination_rgb, i,
+                                         source, destination, constant));
+        switch (alpha ? blend.equation_alpha : blend.equation_rgb) {
+        case BlendEquation::add: result[i] = add(s, d); break;
+        case BlendEquation::subtract: result[i] = add(s, d ^ rsx::shader_ops::k_sign); break;
+        case BlendEquation::reverse_subtract:
+            result[i] = add(d, s ^ rsx::shader_ops::k_sign);
+            break;
+        // MIN and MAX ignore the factors.
+        case BlendEquation::minimum: result[i] = minimum(source[i], destination[i]); break;
+        case BlendEquation::maximum: result[i] = maximum(source[i], destination[i]); break;
+        }
+    }
+    return result;
+}
+
 bool is_culled(const rsx::DrawRequest& request, s64 signed_area) {
     // A positive area is clockwise on screen.
     const bool front = request.front_ccw ? signed_area < 0 : signed_area > 0;
@@ -248,6 +319,11 @@ std::optional<std::string> ReferenceBackend::draw(const rsx::DrawRequest& reques
             }
             for (u32 lane = 0; lane < 4; ++lane) {
                 if ((visible & (1u << lane)) == 0) continue;
+                if (request.alpha_test &&
+                    !passes(request.alpha_test->compare, to_8_bits(result.colors[lane][3]),
+                            request.alpha_test->reference)) {
+                    continue;
+                }
                 const u32 x = quad.x + lane % 2;
                 const u32 y = quad.y + lane / 2;
                 write_pixel(request, x, y, result.colors[lane]);
@@ -288,14 +364,16 @@ void ReferenceBackend::write_depth(const rsx::DepthTest& test, u32 x, u32 y, u32
     memory_.write<u32>(address, value << 8 | (memory_.read<u32>(address) & 0xff));
 }
 
-// Converts a color to 8 bits per channel (clamped, rounded to nearest) and writes the channels
-// the color mask allows.
-void ReferenceBackend::write_pixel(const rsx::DrawRequest& request, u32 x, u32 y,
-                                   const Vec4& color) {
-    const auto channel = [&](int i) {
-        return static_cast<u32>(to_integer(multiply(rsx::shader_ops::saturate(color[i]), k_255)));
-    };
-    u32 value = channel(3) << 24 | channel(0) << 16 | channel(1) << 8 | channel(2);
+// Blends a color with the pixel, converts it to 8 bits per channel and writes the channels the
+// color mask allows.
+void ReferenceBackend::write_pixel(const rsx::DrawRequest& request, u32 x, u32 y, Vec4 color) {
+    const u32 address = request.target.address + y * request.target.pitch + x * 4;
+    if (request.blend) {
+        color = blend(*request.blend, color, unpack(memory_.read<u32>(address)),
+                      request.target.format == rsx::ColorFormat::a8r8g8b8);
+    }
+    u32 value = to_8_bits(color[3]) << 24 | to_8_bits(color[0]) << 16 | to_8_bits(color[1]) << 8 |
+                to_8_bits(color[2]);
     u32 bits = 0;
     const u32 mask = request.color_mask;
     if (mask & 0x0100'0000) bits |= 0xff00'0000;
@@ -306,7 +384,6 @@ void ReferenceBackend::write_pixel(const rsx::DrawRequest& request, u32 x, u32 y
         bits |= 0xff00'0000;
         value = (value & 0x00ff'ffff) | fixed_x_byte(request.target.format);
     }
-    const u32 address = request.target.address + y * request.target.pitch + x * 4;
     memory_.write<u32>(address, (memory_.read<u32>(address) & ~bits) | (value & bits));
 }
 

@@ -139,3 +139,44 @@ TEST_CASE("Metal culls like the reference") {
         }
     }
 }
+
+TEST_CASE("Metal blends like the reference") {
+    CHECK(
+        differing_pixels([](DrawTest& test) {
+            for (u32 i = 0; i < 128 * 8; i += 4) {
+                test.local(i, 0xff20'40c0);
+            }
+            test.methods(method::k_blend_func_source, {0x302 | 1 << 16});          // SRC_ALPHA, ONE
+            test.methods(method::k_blend_func_destination, {0x303 | 0x303 << 16}); // 1 - SRC_ALPHA
+            test.methods(method::k_blend_enable, {1});
+            u32 offset = test::k_vertices;
+            const float vertices[][8] = {
+                {-1, -1, 0, 1, 1, 0, 0, 0}, {1, -1, 0, 1, 0, 1, 0, 1}, {0, 1, 0, 1, 0, 0, 1, 0.5f}};
+            for (const auto& vertex : vertices) {
+                for (const float value : vertex) {
+                    test.local(offset, test::f(value));
+                    offset += 4;
+                }
+            }
+            test.draw(method::k_triangles, 3);
+        }) == 0);
+}
+
+TEST_CASE("Metal alpha-tests like the reference") {
+    CHECK(differing_pixels([](DrawTest& test) {
+              test.methods(method::k_alpha_func, {method::k_greater, 0x60});
+              test.methods(method::k_alpha_test_enable, {1});
+              // Alpha falls from 1 to 0 across the surface.
+              u32 offset = test::k_vertices;
+              const float vertices[][8] = {{-1, -1, 0, 1, 1, 1, 1, 1}, {1, -1, 0, 1, 1, 1, 1, 0},
+                                           {1, 1, 0, 1, 1, 1, 1, 0},   {-1, -1, 0, 1, 1, 1, 1, 1},
+                                           {1, 1, 0, 1, 1, 1, 1, 0},   {-1, 1, 0, 1, 1, 1, 1, 1}};
+              for (const auto& vertex : vertices) {
+                  for (const float value : vertex) {
+                      test.local(offset, test::f(value));
+                      offset += 4;
+                  }
+              }
+              test.draw(method::k_triangles, 6);
+          }) == 0);
+}

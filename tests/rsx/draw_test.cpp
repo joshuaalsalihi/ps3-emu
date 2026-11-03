@@ -82,11 +82,11 @@ TEST_CASE_METHOD(DrawTest, "the color mask keeps channels") {
 }
 
 TEST_CASE_METHOD(DrawTest, "state we don't support yet is reported") {
-    methods(method::k_blend_enable, {1});
+    methods(method::k_stencil_test_enable, {1});
     set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
     draw(method::k_triangles, 3);
     REQUIRE(rsx.error());
-    CHECK(*rsx.error() == "RSX: blending is not supported yet");
+    CHECK(*rsx.error() == "RSX: stencil testing is not supported yet");
 }
 
 TEST_CASE_METHOD(DrawTest, "vertices behind the viewer are reported") {
@@ -201,4 +201,67 @@ TEST_CASE_METHOD(DrawTest, "sampling a disabled or unsupported texture is an err
     other.draw(method::k_triangles, 3);
     REQUIRE(other.rsx.error());
     CHECK(*other.rsx.error() == "RSX: texture unit 0: format 6 is not supported yet");
+}
+
+TEST_CASE_METHOD(DrawTest, "blending combines the fragment with the pixel") {
+    for (u32 i = 0; i < 128 * 8; i += 4) {
+        local(i, 0xff00'00ff); // blue, opaque
+    }
+    // Half-transparent red over it: source alpha, one minus source alpha; alpha keeps the
+    // source's. Each channel is 0.5, which is 127.5, rounded to even: 128.
+    methods(method::k_blend_func_source, {0x302 | 1 << 16});
+    methods(method::k_blend_func_destination, {0x303 | 0 << 16});
+    methods(method::k_blend_enable, {1});
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}}, {1, 0, 0, 0.5f});
+    draw(method::k_triangles, 6);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(count(0x8080'0080) == 16 * 8);
+}
+
+TEST_CASE_METHOD(DrawTest, "blend equations") {
+    const auto blended = [&](u32 equation, u32 stored, float source) {
+        local(0, stored);
+        methods(method::k_blend_func_source, {1 | 1 << 16}); // ONE
+        methods(method::k_blend_func_destination, {1 | 1 << 16});
+        methods(method::k_blend_equation, {equation | equation << 16});
+        methods(method::k_blend_enable, {1});
+        set_vertices({{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}},
+                     {source, source, source, source});
+        draw(method::k_triangles, 6);
+        REQUIRE_FALSE(rsx.error());
+        return pixel(0, 0);
+    };
+    // 200/255 + 0.25, clamped to 1; 200/255 - 0.25 is 136.25 steps; 0.25 - 200/255 clamps to 0.
+    CHECK(blended(0x8006, 0xc8c8'c8c8, 0.25f) == 0xffff'ffff);
+    CHECK(blended(0x800b, 0xc8c8'c8c8, 0.25f) == 0x8888'8888);
+    CHECK(blended(0x800a, 0xc8c8'c8c8, 0.25f) == 0);
+    // MIN and MAX ignore the factors.
+    CHECK(blended(0x8007, 0x1020'30ff, 0.25f) == 0x1020'3040);
+    CHECK(blended(0x8008, 0x1020'30ff, 0.25f) == 0x4040'40ff);
+}
+
+TEST_CASE_METHOD(DrawTest, "an unsupported blend factor is reported") {
+    methods(method::k_blend_func_source, {0xf006});
+    methods(method::k_blend_enable, {1});
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
+    draw(method::k_triangles, 3);
+    REQUIRE(rsx.error());
+    CHECK(*rsx.error() == "RSX: blend factor 0xf006 is not supported yet");
+}
+
+TEST_CASE_METHOD(DrawTest, "the alpha test drops fragments before they write color or depth") {
+    enable_depth();
+    // Alpha 0.5 is 128 as an 8-bit value: not greater than 128, but greater or equal.
+    methods(method::k_alpha_func, {method::k_greater, 0x80});
+    methods(method::k_alpha_test_enable, {1});
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}}, {1, 0, 0, 0.5f});
+    draw(method::k_triangles, 3);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(count(0x80ff'0000) == 0);
+    CHECK(memory.read<u32>(Rsx::k_local_base + k_depth + 128 * 7 + 4 * 15) == 0xffff'ff00);
+
+    methods(method::k_alpha_func, {method::k_greater_equal});
+    draw(method::k_triangles, 3);
+    CHECK(count(0x80ff'0000) == 64);
+    CHECK(memory.read<u32>(Rsx::k_local_base + k_depth + 128 * 7 + 4 * 15) == 0x8000'0000);
 }

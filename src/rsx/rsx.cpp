@@ -52,6 +52,13 @@ Rsx::Rsx(Memory& memory, VirtualClock& clock) : memory_(memory), clock_(clock) {
     registers_[0][method::k_scissor_horizontal / 4] = 4096u << 16;
     registers_[0][method::k_scissor_vertical / 4] = 4096u << 16;
     registers_[0][method::k_color_mask / 4] = 0x0101'0101;
+    // UNVERIFIED: the rest start as OpenGL's defaults.
+    registers_[0][method::k_alpha_func / 4] = method::k_always;
+    registers_[0][method::k_blend_func_source / 4] = 1 | 1 << 16;        // ONE
+    registers_[0][method::k_blend_equation / 4] = 0x8006 | 0x8006 << 16; // FUNC_ADD
+    registers_[0][method::k_depth_func / 4] = method::k_less;
+    registers_[0][method::k_cull_face / 4] = method::k_cull_back;
+    registers_[0][method::k_front_face / 4] = method::k_front_face_ccw;
 }
 
 // ---- Memory ----
@@ -363,9 +370,7 @@ void Rsx::end_primitive() {
         const char* what;
     };
     for (const auto& [enable, what] :
-         {Unsupported{method::k_blend_enable, "blending"},
-          Unsupported{method::k_alpha_test_enable, "alpha testing"},
-          Unsupported{method::k_stencil_test_enable, "stencil testing"},
+         {Unsupported{method::k_stencil_test_enable, "stencil testing"},
           Unsupported{method::k_logic_op_enable, "logic operations"}}) {
         if (reg(enable) != 0) return fail(std::format("{} is not supported yet", what));
     }
@@ -419,7 +424,10 @@ void Rsx::end_primitive() {
     request.target = *target;
     request.color_mask = reg(method::k_color_mask);
     request.flat_shading = reg(method::k_shade_mode) == method::k_shade_flat;
-    if (!set_depth_test(request) || !set_culling(request)) return;
+    if (!set_alpha_test(request) || !set_depth_test(request) || !set_blend(request) ||
+        !set_culling(request)) {
+        return;
+    }
     for (const fragment::Instruction& instruction : request.fragment_program) {
         if (!fragment::is_texture_lookup(instruction)) continue;
         const u32 unit = instruction.texture_unit;
@@ -431,6 +439,51 @@ void Rsx::end_primitive() {
     if (backend_) {
         if (auto error = backend_->draw(request)) fail(std::move(*error));
     }
+}
+
+bool Rsx::set_alpha_test(DrawRequest& request) {
+    if (reg(method::k_alpha_test_enable) == 0) return true;
+    const u32 compare = reg(method::k_alpha_func);
+    if (compare < method::k_never || compare > method::k_always) {
+        fail(std::format("alpha function {:#x} is invalid", compare));
+        return false;
+    }
+    request.alpha_test = AlphaTest{static_cast<Compare>(compare), reg(method::k_alpha_ref) & 0xff};
+    return true;
+}
+
+bool Rsx::set_blend(DrawRequest& request) {
+    if (reg(method::k_blend_enable) == 0) return true;
+    const auto factor = [&](u32 value) -> std::optional<BlendFactor> {
+        if (value <= 1 || (value >= 0x300 && value <= 0x308) ||
+            (value >= 0x8001 && value <= 0x8004)) {
+            return static_cast<BlendFactor>(value);
+        }
+        fail(std::format("blend factor {:#x} is not supported yet", value));
+        return std::nullopt;
+    };
+    const auto equation = [&](u32 value) -> std::optional<BlendEquation> {
+        if (value == 0x8006 || value == 0x8007 || value == 0x8008 || value == 0x800a ||
+            value == 0x800b) {
+            return static_cast<BlendEquation>(value);
+        }
+        fail(std::format("blend equation {:#x} is not supported yet", value));
+        return std::nullopt;
+    };
+    const u32 source = reg(method::k_blend_func_source);
+    const u32 destination = reg(method::k_blend_func_destination);
+    const u32 equations = reg(method::k_blend_equation);
+    const auto source_rgb = factor(source & 0xffff);
+    const auto source_alpha = factor(source >> 16);
+    const auto destination_rgb = factor(destination & 0xffff);
+    const auto destination_alpha = factor(destination >> 16);
+    const auto equation_rgb = equation(equations & 0xffff);
+    const auto equation_alpha = equation(equations >> 16);
+    if (error_) return false;
+    request.blend =
+        Blend{*source_rgb,   *source_alpha,   *destination_rgb,          *destination_alpha,
+              *equation_rgb, *equation_alpha, reg(method::k_blend_color)};
+    return true;
 }
 
 bool Rsx::set_depth_test(DrawRequest& request) {

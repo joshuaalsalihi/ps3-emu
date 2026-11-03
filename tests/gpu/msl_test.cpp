@@ -36,8 +36,10 @@ TEST_CASE("a pass-through program translates to MSL") {
     move.mask = 0xf;
     move.end = true;
 
-    const gpu::MslTranslation msl =
-        gpu::translate_to_msl({move_to_output(0, 0), move_to_output(3, 1)}, {move}, false);
+    rsx::DrawRequest request;
+    request.vertex_program.instructions = {move_to_output(0, 0), move_to_output(3, 1)};
+    request.fragment_program = {move};
+    const gpu::MslTranslation msl = gpu::translate_to_msl(request);
     REQUIRE_FALSE(msl.error);
     CHECK(contains(msl.source, "vertex Varyings vertex_main("));
     CHECK(contains(msl.source, "fragment float4 fragment_main("));
@@ -59,7 +61,10 @@ TEST_CASE("modifiers, masks, saturation and flat shading appear in the MSL") {
     instruction.vector_mask = 0b0101;
     instruction.saturate = true;
 
-    const gpu::MslTranslation msl = gpu::translate_to_msl({instruction}, {}, true);
+    rsx::DrawRequest request;
+    request.vertex_program.instructions = {instruction};
+    request.flat_shading = true;
+    const gpu::MslTranslation msl = gpu::translate_to_msl(request);
     REQUIRE_FALSE(msl.error);
     CHECK(contains(msl.source, "float4 a = -v[0].wzyx;"));
     CHECK(contains(msl.source, "float4 c = abs(constants[5].xyzw);"));
@@ -71,7 +76,33 @@ TEST_CASE("modifiers, masks, saturation and flat shading appear in the MSL") {
 TEST_CASE("instructions MSL can't express yet are reported") {
     vertex::Instruction instruction = move_to_output(0, 0);
     instruction.vector_opcode = 0x0d; // ARL
-    const gpu::MslTranslation msl = gpu::translate_to_msl({instruction}, {}, false);
+    rsx::DrawRequest request;
+    request.vertex_program.instructions = {instruction};
+    const gpu::MslTranslation msl = gpu::translate_to_msl(request);
     REQUIRE(msl.error);
     CHECK(*msl.error == "vertex vector opcode 0xd can't be translated to Metal yet");
+}
+
+TEST_CASE("texture lookups and the alpha test appear in the MSL") {
+    fragment::Instruction lookup;
+    lookup.opcode = 0x18; // TXP
+    lookup.texture_unit = 2;
+    lookup.input = fragment::k_input_texcoord0;
+    lookup.sources[0].type = fragment::SourceType::input;
+    lookup.mask = 0xf;
+    lookup.end = true;
+
+    rsx::DrawRequest request;
+    request.fragment_program = {lookup};
+    CHECK(gpu::translate_to_msl(request).error ==
+          "a missing texture can't be translated to Metal yet");
+
+    request.textures[2] = rsx::Texture{};
+    request.textures[2]->lod_bias = -128; // -0.5
+    request.alpha_test = rsx::AlphaTest{rsx::Compare::greater_equal, 0x40};
+    const gpu::MslTranslation msl = gpu::translate_to_msl(request);
+    REQUIRE_FALSE(msl.error);
+    CHECK(contains(msl.source, "texture2d<float> t2 [[texture(2)]], sampler s2 [[sampler(2)]]"));
+    CHECK(contains(msl.source, "t2.sample(s2, a.xy / a.w, bias(-0x80p-8))"));
+    CHECK(contains(msl.source, "if (!(alpha >= 64u)) discard_fragment();"));
 }

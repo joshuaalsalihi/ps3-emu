@@ -1,0 +1,9 @@
+!!ARBvp1.0
+# rsx_scene's vertex program. c[0..3]: the model-view-projection matrix's rows.
+DP4 result.position.x, c[0], vertex.position;
+DP4 result.position.y, c[1], vertex.position;
+DP4 result.position.z, c[2], vertex.position;
+DP4 result.position.w, c[3], vertex.position;
+MOV result.color, vertex.color;
+MOV result.texcoord[0], vertex.texcoord[0];
+END
