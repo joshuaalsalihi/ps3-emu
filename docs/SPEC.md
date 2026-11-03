@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.12 · 2026-11-01 · M6 complete
+**Status:** Draft v0.13 · 2026-11-02 · M7 in progress
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -329,16 +329,30 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
 - **Shaders:** RSX vertex and fragment programs are decoded into a shared IR (`rsx::vertex` and
   `rsx::fragment` instructions, with fields from nouveau's NV30/NV40 headers), which the reference
   backend interprets and GPU backends will translate (Metal Shading Language first, SPIR-V
-  later; cached by hash). Shader arithmetic uses `soft_float` in single precision.
-- **Draws:** BEGIN_END and DRAW_ARRAYS collect vertex indices; ending the primitive builds a
-  draw request (vertex arrays, both programs, viewport, render target). Triangles, strips and
-  fans into one color target, with no depth test, blending or culling yet; enabling those ends
-  the run with a clear "not supported yet" error.
+  later; cached by hash). Shader arithmetic uses `soft_float` in single precision. Fragment
+  programs run on 2x2 quads of pixels, as on GPUs of the RSX's generation, so `DDX`, `DDY` and
+  texture lookups can compare neighbors; lanes outside the triangle still run, as helpers.
+- **Draws:** BEGIN_END with DRAW_ARRAYS or an index array (16- or 32-bit) collects vertex
+  indices; ending the primitive builds a draw request (vertex arrays, both programs, viewport,
+  render target, depth test, culling, textures). Triangles, strips and fans into one color
+  target, with no blending yet; enabling something unsupported ends the run with a clear "not
+  supported yet" error.
 - **Reference rasterization:** vertices go through the vertex program, the perspective divide
   and the viewport transform, then snap to 1/16 pixel. Coverage is decided with integer edge
   functions at pixel centers and a top-left fill rule, so triangles sharing an edge never both
   cover a pixel. Attributes are interpolated with perspective correction, and the fragment
   program's color is clamped and rounded to 8 bits per channel.
+- **Depth and culling:** window z is interpolated linearly across the screen, clamped to 0..1
+  and rounded to the depth format (Z16 or Z24S8, whose stencil byte is kept); the depth test
+  takes the eight usual comparisons, with writes optional. Culling judges a triangle's winding
+  as it appears on the display (libgcm sets a top-left window origin), so the usual OpenGL-style
+  setup (counterclockwise front faces, a viewport that flips y) culls the back faces.
+- **Textures** (`gpu/texture.h`): 2D textures in the 16- and 32-bit color formats, linear or
+  swizzled (Morton order), with mipmaps, the channel remap, normalized or texel coordinates,
+  repeat, mirrored repeat, clamp-to-edge and border wrapping, and nearest, linear and mipmapped
+  filters. Sampling follows OpenGL's rules: texel centers at half-integers, and the level of
+  detail from the quad's derivatives. Compressed (DXT), cube, 3D and float textures aren't
+  supported yet.
 - **Surfaces:** a cache tracks render targets. A CPU write to a surface's memory invalidates it;
   reading it back triggers a write-back. Start conservative; optimize later.
 - **Backends:** `Reference` (software, pixel by pixel into guest memory; exact and identical on
@@ -352,7 +366,12 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   surfaces on the GPU comes later. The vertex function applies the RSX viewport transform
   itself. Metal shades flat triangles from their first vertex, so the backend rotates them to
   match the reference's last-vertex rule. Clears are memory fills, shared with the reference.
-  On the test machine the PSL1GHT triangle's frame is bit-identical to the reference.
+  Textures are decoded the reference's way and uploaded as RGBA8; the depth buffer round-trips
+  through guest memory like the color target (Z24 as 32-bit floats, which Apple GPUs need).
+  On the test machine the PSL1GHT triangle's frame is bit-identical to the reference. In the
+  cubes' frames 13-16% of the cubes' pixels differ, nearly all by one step; 1-3% differ by more,
+  along texel edges (Metal filters in lower precision) and at silhouettes (Metal snaps vertices
+  more finely).
 
 ---
 
@@ -382,7 +401,8 @@ everything above.
 - Instruction unit tests: inputs → expected outputs and flags, for every instruction.
 - Example programs (`examples/`): small guest programs built with LLVM, whose output must match a
   `.expected` file exactly, and PSL1GHT programs (threads, floats, SPU threads with mailboxes,
-  DMA, atomics, event queues and `spu_printf`). Later: a triangle and an audio tone, with framebuffer and audio hashes.
+  DMA, atomics, event queues and `spu_printf`, and graphics: a clear, a triangle and textured
+  cubes, checked by frame hashes). Later: an audio tone, with audio hashes.
 - Determinism tests: two runs must produce identical state hashes.
 - CI runs everything headless, using the `Null` GPU backend.
 
@@ -523,8 +543,12 @@ ASan/UBSan.
 14. The RSX's shader and rasterization details: its floating-point rules (we assume IEEE single
     rounded to nearest, denormals kept, NaN operands giving the default NaN, MAD rounding
     twice, and exact RCP/RSQ); which sources each vertex opcode reads (we read ADD's second
-    operand from source 2); the subpixel precision (1/16) and fill rule; the flat-shading
-    vertex (the last); and how colors round to 8 bits (to nearest).
+    operand from source 2, as cgcomp encodes it); the subpixel precision (1/16) and fill rule;
+    the flat-shading vertex (the last); and how colors round to 8 bits (to nearest).
+15. The RSX's depth and texture details: how depth is clamped and rounded; how winding is judged
+    for culling; how the derivatives within a quad pair up; the texture swizzle for
+    non-square sizes and where a linear texture's smaller mipmap levels go; whether the border
+    color is remapped; and the precision of its filtering (ours is exact arithmetic).
 
 ---
 

@@ -23,6 +23,7 @@ The `psl1ght/` directory holds real PS3 homebrew, written against the
 | `psl1ght/spu_threads.c` | Two SPU threads (`spu_threads_spu.c`, built with `spu-gcc`): mailboxes, DMA gets and puts, and an atomic counter shared with the PPU. |
 | `psl1ght/rsx_clear.c` | The RSX through libgcm: display buffers, clears and vsync flips. `rsx_clear.frames` holds the hashes of the frames it shows. |
 | `psl1ght/rsx_triangle.c` | A smooth-shaded triangle, with a vertex and a fragment program (`rsx_triangle.vcg`, `.fcg`) assembled by the toolchain's `cgcomp`. |
+| `psl1ght/rsx_cube.c` | Two lit, textured cubes turning over three frames, one cutting through the other: matrices in vertex program constants, an index array, a depth buffer, back-face culling and bilinear filtering. |
 | `psl1ght/spu_events.c` | Event queues and ports in both directions between the PPU and an SPU thread (`spu_events_spu.c`), and `spu_printf`. |
 
 Output never depends on how the threads interleave: either only the main thread prints, after its

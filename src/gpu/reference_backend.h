@@ -18,6 +18,9 @@ public:
 
 private:
     void write_pixel(const rsx::DrawRequest& request, u32 x, u32 y, const rsx::Vec4& color);
+    static u32 depth_value(const rsx::DepthTest& test, rsx::shader_float::Float z);
+    u32 read_depth(const rsx::DepthTest& test, u32 x, u32 y) const;
+    void write_depth(const rsx::DepthTest& test, u32 x, u32 y, u32 value);
 
     Memory& memory_;
 };

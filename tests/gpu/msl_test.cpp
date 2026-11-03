@@ -62,7 +62,7 @@ TEST_CASE("modifiers, masks, saturation and flat shading appear in the MSL") {
     const gpu::MslTranslation msl = gpu::translate_to_msl({instruction}, {}, true);
     REQUIRE_FALSE(msl.error);
     CHECK(contains(msl.source, "float4 a = -v[0].wzyx;"));
-    CHECK(contains(msl.source, "float4 c = abs(c[5].xyzw);"));
+    CHECK(contains(msl.source, "float4 c = abs(constants[5].xyzw);"));
     CHECK(contains(msl.source, "float4 vector = a + c;"));
     CHECK(contains(msl.source, "o[7].xz = clamp(vector, 0.0, 1.0).xz;"));
     CHECK(contains(msl.source, "[[user(o1), flat]]"));

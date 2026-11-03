@@ -3,6 +3,7 @@ add_library(ps3emu_core STATIC
     common/png.cpp
     common/sha1.cpp
     common/soft_float.cpp
+    common/soft_float_math.cpp
     core/memory.cpp
     core/range_allocator.cpp
     core/system.cpp
@@ -40,6 +41,7 @@ add_library(ps3emu_core STATIC
     gpu/msl.cpp
     gpu/rasterizer.cpp
     gpu/reference_backend.cpp
+    gpu/texture.cpp
     gpu/vertex_input.cpp
     hle/cell_gcm_sys.cpp
     hle/cell_sysutil.cpp

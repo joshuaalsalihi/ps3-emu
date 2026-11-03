@@ -40,8 +40,14 @@ constexpr u32 k_surface_pitch_d = 0x0284;
 constexpr u32 k_surface_color_offset_c = 0x0288;
 constexpr u32 k_surface_color_offset_d = 0x028c;
 constexpr u32 k_alpha_test_enable = 0x0304;
+constexpr u32 k_alpha_func = 0x0308; // see k_never ... k_always
+constexpr u32 k_alpha_ref = 0x030c;
 constexpr u32 k_blend_enable = 0x0310;
-constexpr u32 k_color_mask = 0x0324; // A, R, G, B enables: bits 24, 16, 8, 0
+constexpr u32 k_blend_func_source = 0x0314;      // RGB factor | alpha factor << 16
+constexpr u32 k_blend_func_destination = 0x0318; // RGB factor | alpha factor << 16
+constexpr u32 k_blend_color = 0x031c;            // A8R8G8B8
+constexpr u32 k_blend_equation = 0x0320;         // RGB equation | alpha equation << 16
+constexpr u32 k_color_mask = 0x0324;             // A, R, G, B enables: bits 24, 16, 8, 0
 constexpr u32 k_stencil_test_enable = 0x0348;
 constexpr u32 k_shade_mode = 0x0368; // see k_shade_*
 constexpr u32 k_logic_op_enable = 0x0374;
@@ -50,6 +56,7 @@ constexpr u32 k_scissor_vertical = 0x08c4;   // y | height << 16
 constexpr u32 k_shader_program = 0x08e4;     // fragment program offset | location (1 local, 2 main)
 constexpr u32 k_viewport_offset = 0x0a20;    // 4 floats: x, y, z, w
 constexpr u32 k_viewport_scale = 0x0a30;     // 4 floats
+constexpr u32 k_depth_func = 0x0a6c;         // see k_never ... k_always
 constexpr u32 k_depth_write_enable = 0x0a70;
 constexpr u32 k_depth_test_enable = 0x0a74;
 constexpr u32 k_transform_program = 0x0b80;        // 32 words: the next words of the vertex program
@@ -57,7 +64,23 @@ constexpr u32 k_vertex_data_array_offset = 0x1680; // 16 of: offset | location <
 constexpr u32 k_vertex_data_array_format = 0x1740; // 16 of: type | size << 4 | stride << 8
 constexpr u32 k_begin_end = 0x1808;                // a primitive type, or 0 to end
 constexpr u32 k_draw_arrays = 0x1814;              // first | (count - 1) << 24
+constexpr u32 k_index_array_offset = 0x181c;
+constexpr u32 k_index_array_format = 0x1820; // location (0 local, 1 main) | type << 4
+constexpr u32 k_draw_index_array = 0x1824;   // first | (count - 1) << 24
+constexpr u32 k_cull_face = 0x1830;          // see k_cull_*
+constexpr u32 k_front_face = 0x1834;         // see k_front_face_*
 constexpr u32 k_cull_face_enable = 0x183c;
+constexpr u32 k_texture_size = 0x1840; // 16 of: pitch | depth << 20
+// The fragment textures, 16 units of 8 methods each, 0x20 apart.
+constexpr u32 k_texture_offset = 0x1a00;
+constexpr u32 k_texture_format = 0x1a04;  // see Texture in rsx/backend.h
+constexpr u32 k_texture_address = 0x1a08; // wrap modes
+constexpr u32 k_texture_control = 0x1a0c; // enable, LOD range
+constexpr u32 k_texture_remap = 0x1a10;   // channel order
+constexpr u32 k_texture_filter = 0x1a14;
+constexpr u32 k_texture_image_rect = 0x1a18; // height | width << 16
+constexpr u32 k_texture_border_color = 0x1a1c;
+constexpr u32 k_texture_stride = 0x20;
 constexpr u32 k_semaphore_offset_3d = 0x1d6c; // the 3D class's own label writes
 constexpr u32 k_back_end_write_semaphore_release = 0x1d70;
 constexpr u32 k_texture_read_semaphore_release = 0x1d74;
@@ -68,6 +91,27 @@ constexpr u32 k_transform_program_load = 0x1e9c;  // where the next vertex progr
 constexpr u32 k_transform_program_start = 0x1ea0; // where the vertex program starts
 constexpr u32 k_transform_constant_load = 0x1efc; // where the next constants go
 constexpr u32 k_transform_constant = 0x1f00;      // 32 words: the next constants' components
+
+// Comparison functions, for depth and alpha tests. PSL1GHT, rsx/gcm_sys.h: GCM_NEVER ...
+constexpr u32 k_never = 0x0200;
+constexpr u32 k_less = 0x0201;
+constexpr u32 k_equal = 0x0202;
+constexpr u32 k_less_equal = 0x0203;
+constexpr u32 k_greater = 0x0204;
+constexpr u32 k_not_equal = 0x0205;
+constexpr u32 k_greater_equal = 0x0206;
+constexpr u32 k_always = 0x0207;
+
+// k_cull_face and k_front_face values. GCM_CULL_*, GCM_FRONTFACE_*.
+constexpr u32 k_cull_front = 0x0404;
+constexpr u32 k_cull_back = 0x0405;
+constexpr u32 k_cull_front_and_back = 0x0408;
+constexpr u32 k_front_face_cw = 0x0900;
+constexpr u32 k_front_face_ccw = 0x0901;
+
+// k_index_array_format types. GCM_INDEX_TYPE_*.
+constexpr u32 k_index_32 = 0;
+constexpr u32 k_index_16 = 1;
 
 // k_shade_mode values.
 constexpr u32 k_shade_flat = 0x1d00;

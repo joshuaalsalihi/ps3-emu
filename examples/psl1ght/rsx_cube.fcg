@@ -1,0 +1,5 @@
+!!ARBfp1.0
+# rsx_cube's fragment program: the texture, lit by the vertex color.
+TEX R1, fragment.texcoord[0], texture[0], 2D;
+MUL result.color, R1, fragment.color;
+END

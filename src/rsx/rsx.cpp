@@ -3,6 +3,7 @@
 #include "rsx/methods.h"
 
 #include <algorithm>
+#include <bit>
 #include <format>
 #include <ostream>
 
@@ -250,6 +251,7 @@ void Rsx::execute_3d(u32 method, u32 value) {
         }
         break;
     }
+    case method::k_draw_index_array: read_indices(value & 0xff'ffff, (value >> 24) + 1); break;
     case method::k_clear_surface: clear_surface(value); break;
     case method::k_back_end_write_semaphore_release:
     case method::k_texture_read_semaphore_release:
@@ -260,6 +262,23 @@ void Rsx::execute_3d(u32 method, u32 value) {
 }
 
 // ---- Rendering ----
+
+// Appends `count` vertex indices from the index array, starting at index `first`.
+void Rsx::read_indices(u32 first, u32 count) {
+    const u32 format = reg(method::k_index_array_format);
+    const u32 context = (format & 0xf) == 0 ? method::k_context_local : method::k_context_main;
+    const u32 type = format >> 4;
+    if (type != method::k_index_16 && type != method::k_index_32) {
+        return fail(std::format("index array type {} is not supported yet", type));
+    }
+    const u32 size = type == method::k_index_16 ? 2 : 4;
+    const auto address = resolve(context, reg(method::k_index_array_offset));
+    if (!address) return fail("the index array is at an unmapped offset");
+    for (u32 i = first; i < first + count; ++i) {
+        const u32 at = *address + size * i;
+        draw_vertices_.push_back(size == 2 ? memory_.read<u16>(at) : memory_.read<u32>(at));
+    }
+}
 
 void Rsx::clear_surface(u32 mask) {
     const u32 format = reg(method::k_surface_format);
@@ -344,12 +363,10 @@ void Rsx::end_primitive() {
         const char* what;
     };
     for (const auto& [enable, what] :
-         {Unsupported{method::k_depth_test_enable, "depth testing"},
-          Unsupported{method::k_blend_enable, "blending"},
+         {Unsupported{method::k_blend_enable, "blending"},
           Unsupported{method::k_alpha_test_enable, "alpha testing"},
           Unsupported{method::k_stencil_test_enable, "stencil testing"},
-          Unsupported{method::k_logic_op_enable, "logic operations"},
-          Unsupported{method::k_cull_face_enable, "face culling"}}) {
+          Unsupported{method::k_logic_op_enable, "logic operations"}}) {
         if (reg(enable) != 0) return fail(std::format("{} is not supported yet", what));
     }
 
@@ -402,10 +419,137 @@ void Rsx::end_primitive() {
     request.target = *target;
     request.color_mask = reg(method::k_color_mask);
     request.flat_shading = reg(method::k_shade_mode) == method::k_shade_flat;
+    if (!set_depth_test(request) || !set_culling(request)) return;
+    for (const fragment::Instruction& instruction : request.fragment_program) {
+        if (!fragment::is_texture_lookup(instruction)) continue;
+        const u32 unit = instruction.texture_unit;
+        if (request.textures[unit]) continue;
+        request.textures[unit] = texture(unit);
+        if (!request.textures[unit]) return;
+    }
 
     if (backend_) {
         if (auto error = backend_->draw(request)) fail(std::move(*error));
     }
+}
+
+bool Rsx::set_depth_test(DrawRequest& request) {
+    if (reg(method::k_depth_test_enable) == 0) return true;
+    const u32 format = (reg(method::k_surface_format) >> 5) & 7;
+    if (format != 1 && format != 2) {
+        fail(std::format("depth format {} is not supported yet", format));
+        return false;
+    }
+    const auto address =
+        resolve(reg(method::k_set_zeta_context), reg(method::k_surface_zeta_offset));
+    if (!address) {
+        fail("the depth surface is at an unmapped offset");
+        return false;
+    }
+    const u32 compare = reg(method::k_depth_func);
+    if (compare < method::k_never || compare > method::k_always) {
+        fail(std::format("depth function {:#x} is invalid", compare));
+        return false;
+    }
+    request.depth_test =
+        DepthTest{{*address, reg(method::k_surface_pitch_zeta), static_cast<DepthFormat>(format)},
+                  static_cast<Compare>(compare),
+                  reg(method::k_depth_write_enable) != 0};
+    return true;
+}
+
+bool Rsx::set_culling(DrawRequest& request) {
+    // UNVERIFIED: the front face is judged as triangles appear on the display, which is the
+    // window origin (top left) libgcm sets in COORD_CONVENTIONS.
+    request.front_ccw = reg(method::k_front_face) != method::k_front_face_cw;
+    if (reg(method::k_cull_face_enable) == 0) return true;
+    switch (reg(method::k_cull_face)) {
+    case method::k_cull_front: request.cull = Cull::front; return true;
+    case method::k_cull_back: request.cull = Cull::back; return true;
+    case method::k_cull_front_and_back: request.cull = Cull::front_and_back; return true;
+    default:
+        fail(std::format("cull face {:#x} is invalid", reg(method::k_cull_face)));
+        return false;
+    }
+}
+
+// Texture unit `unit` as the methods describe it; none (and a fault) if it can't be sampled.
+// Register fields: nouveau's nv30-40_3d.xml.h (NV40_3D_TEX_*), checked against what PSL1GHT's
+// libgcm writes.
+std::optional<Texture> Rsx::texture(u32 unit) {
+    const auto field = [&](u32 method, u32 shift, u32 width) {
+        return (reg(method + unit * method::k_texture_stride) >> shift) & ((1u << width) - 1);
+    };
+    const auto unsupported = [&](const std::string& what) {
+        fail(std::format("texture unit {}: {} is not supported yet", unit, what));
+        return std::nullopt;
+    };
+    if (field(method::k_texture_control, 31, 1) == 0) {
+        fail(std::format("the fragment program samples disabled texture unit {}", unit));
+        return std::nullopt;
+    }
+
+    Texture texture;
+    const u32 location = field(method::k_texture_format, 0, 2);
+    const u32 context = location == 2 ? method::k_context_main : method::k_context_local;
+    const auto address =
+        resolve(context, reg(method::k_texture_offset + unit * method::k_texture_stride));
+    if (location == 0 || location == 3 || !address) {
+        fail(std::format("texture unit {} is at an unmapped offset", unit));
+        return std::nullopt;
+    }
+    texture.address = *address;
+    if (field(method::k_texture_format, 2, 1)) return unsupported("a cube map");
+    if (const u32 dimensions = field(method::k_texture_format, 4, 4); dimensions != 2) {
+        return unsupported(std::format("a {}D texture", dimensions));
+    }
+
+    // The format byte: GCM_TEXTURE_FORMAT_* in bits 0-4, then LIN and UNRM.
+    const u32 format = field(method::k_texture_format, 8, 5);
+    switch (format) {
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+    case 29:
+    case 30: texture.format = static_cast<TextureFormat>(format); break;
+    default: return unsupported(std::format("format {}", format));
+    }
+    texture.linear = field(method::k_texture_format, 13, 1) != 0;
+    texture.normalized = field(method::k_texture_format, 14, 1) == 0;
+    texture.levels = std::max(field(method::k_texture_format, 16, 4), 1u);
+    texture.width = field(method::k_texture_image_rect, 16, 16);
+    texture.height = field(method::k_texture_image_rect, 0, 16);
+    texture.pitch = field(method::k_texture_size, 0, 16);
+    if (texture.width == 0 || texture.height == 0) return unsupported("an empty texture");
+    if (!texture.linear &&
+        (!std::has_single_bit(texture.width) || !std::has_single_bit(texture.height))) {
+        fail(std::format("texture unit {} is swizzled but not a power of two in size", unit));
+        return std::nullopt;
+    }
+
+    texture.remap = field(method::k_texture_remap, 0, 16);
+    for (const auto& [shift, wrap] : {std::pair{0u, &texture.wrap_s}, {8u, &texture.wrap_t}}) {
+        const u32 mode = field(method::k_texture_address, shift, 4);
+        if (mode < 1 || mode > 4) return unsupported(std::format("wrap mode {}", mode));
+        *wrap = static_cast<TextureWrap>(mode);
+    }
+    const u32 minify = field(method::k_texture_filter, 16, 4);
+    const u32 magnify = field(method::k_texture_filter, 24, 4);
+    if (minify < 1 || minify > 6) return unsupported(std::format("minification filter {}", minify));
+    if (magnify < 1 || magnify > 2) {
+        return unsupported(std::format("magnification filter {}", magnify));
+    }
+    texture.minify = static_cast<TextureFilter>(minify);
+    texture.magnify = static_cast<TextureFilter>(magnify);
+    // The LOD range is unsigned 4.8 fixed point (libgcm writes 12.0 as 0xc00 << 7). UNVERIFIED:
+    // the bias as a signed 5.8 number in bits 0-12.
+    const u32 bias = field(method::k_texture_filter, 0, 13);
+    texture.lod_bias = static_cast<s32>(bias << 19) >> 19;
+    texture.max_lod = field(method::k_texture_control, 7, 12);
+    texture.min_lod = field(method::k_texture_control, 19, 12);
+    texture.border_color = reg(method::k_texture_border_color + unit * method::k_texture_stride);
+    return texture;
 }
 
 // ---- Display ----

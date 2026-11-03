@@ -80,3 +80,62 @@ TEST_CASE("Metal keeps the color mask and scissor") {
               test.draw(method::k_triangles, 6);
           }) == 0);
 }
+
+TEST_CASE("Metal samples a texture like the reference") {
+    CHECK(differing_pixels([](DrawTest& test) {
+              test.use_texture_programs();
+              test.set_texture();
+              test.set_textured_square();
+              test.draw(method::k_triangles, 6);
+          }) == 0);
+}
+
+TEST_CASE("Metal filters a texture like the reference") {
+    CHECK(differing_pixels([](DrawTest& test) {
+              test.use_texture_programs();
+              test.set_texture();
+              test.methods(method::k_texture_filter, {2 << 16 | 2 << 24}); // linear
+              test.set_textured_square();
+              test.draw(method::k_triangles, 6);
+          }) == 0);
+}
+
+TEST_CASE("Metal depth-tests like the reference") {
+    CHECK(differing_pixels([](DrawTest& test) {
+              test.enable_depth();
+              test.set_square_indices();
+              test.set_corners({1, 0, 0, 1}, 0.5f);
+              test.draw_indexed(method::k_index_16, 6);
+              test.set_corners({0, 1, 0, 1}, -0.5f);
+              test.draw_indexed(method::k_index_16, 6);
+              test.set_corners({0, 0, 1, 1}, 0.0f);
+              test.draw_indexed(method::k_index_16, 6);
+              // And a triangle cutting through the green square, so depth varies per pixel.
+              u32 offset = test::k_vertices;
+              const float vertices[][8] = {
+                  {-1, -1, -1, 1, 1, 1, 0, 1}, {1, -1, 1, 1, 1, 1, 0, 1}, {0, 1, 0, 1, 1, 1, 0, 1}};
+              for (const auto& vertex : vertices) {
+                  for (const float value : vertex) {
+                      test.local(offset, test::f(value));
+                      offset += 4;
+                  }
+              }
+              test.draw(method::k_triangles, 3);
+          }) == 0);
+}
+
+TEST_CASE("Metal culls like the reference") {
+    for (const u32 front : {method::k_front_face_ccw, method::k_front_face_cw}) {
+        for (const u32 cull : {method::k_cull_back, method::k_cull_front}) {
+            CHECK(differing_pixels([&](DrawTest& test) {
+                      test.methods(method::k_cull_face_enable, {1});
+                      test.methods(method::k_cull_face, {cull});
+                      test.methods(method::k_front_face, {front});
+                      // One triangle of each winding.
+                      test.set_vertices({{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {-1, 1}, {1, 1}},
+                                        {1, 0, 0, 1});
+                      test.draw(method::k_triangles, 6);
+                  }) == 0);
+        }
+    }
+}

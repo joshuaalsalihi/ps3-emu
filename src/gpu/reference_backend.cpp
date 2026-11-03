@@ -1,6 +1,7 @@
 #include "gpu/reference_backend.h"
 
 #include "gpu/rasterizer.h"
+#include "gpu/texture.h"
 #include "gpu/vertex_input.h"
 #include "rsx/methods.h"
 #include "rsx/shader_ops.h"
@@ -90,8 +91,87 @@ constexpr s64 k_max_subpixels = s64{1} << 24;
 struct ShadedVertex {
     std::array<Vec4, rsx::vertex::k_output_count> outputs;
     FixedPoint window;
+    Float window_z = k_zero;
     Float inverse_w = k_one;
 };
+
+struct Triangle {
+    std::array<const ShadedVertex*, 3> vertices;
+    Float inverse_area = k_one; // 1 / the total of the rasterizer's weights
+};
+
+// The fragment program's inputs that come from vertex outputs: fragment input, vertex output.
+using Varyings = std::vector<std::pair<u32, u32>>;
+
+struct QuadInputs {
+    rsx::fragment::Quad<rsx::fragment::Inputs> inputs{};
+    std::array<Float, 4> depth{}; // each lane's window z
+};
+
+// Each lane's inputs, from the triangle's vertices: window z varies linearly across the
+// screen, the other values with perspective correction (each vertex's share, divided by its w).
+QuadInputs interpolate(const rsx::DrawRequest& request, const Triangle& triangle,
+                       const Varyings& varyings, const Quad& quad) {
+    const auto& v = triangle.vertices;
+    QuadInputs result;
+    for (u32 lane = 0; lane < 4; ++lane) {
+        rsx::fragment::Inputs& inputs = result.inputs[lane];
+        inputs[rsx::fragment::k_input_position] = {add(from_integer(quad.x + lane % 2), k_half),
+                                                   add(from_integer(quad.y + lane / 2), k_half),
+                                                   k_zero, k_one};
+        std::array<Float, 3> q{};
+        Float sum = k_zero;
+        for (int i = 0; i < 3; ++i) {
+            const Float share =
+                multiply(from_integer(quad.weights[lane][i]), triangle.inverse_area);
+            q[i] = multiply(share, v[i]->inverse_w);
+            sum = add(sum, q[i]);
+            result.depth[lane] = multiply_add(share, v[i]->window_z, result.depth[lane]);
+        }
+        const Float inverse_sum = reciprocal(sum);
+        for (const auto& [input, output] : varyings) {
+            for (int c = 0; c < 4; ++c) {
+                if (request.flat_shading) {
+                    // UNVERIFIED: the last vertex provides flat-shaded values.
+                    inputs[input][c] = v[2]->outputs[output][c];
+                    continue;
+                }
+                Float value = k_zero;
+                for (int i = 0; i < 3; ++i) {
+                    value = multiply_add(q[i], v[i]->outputs[output][c], value);
+                }
+                inputs[input][c] = multiply(value, inverse_sum);
+            }
+        }
+    }
+    return result;
+}
+
+bool is_culled(const rsx::DrawRequest& request, s64 signed_area) {
+    // A positive area is clockwise on screen.
+    const bool front = request.front_ccw ? signed_area < 0 : signed_area > 0;
+    switch (request.cull) {
+    case rsx::Cull::none: return false;
+    case rsx::Cull::front: return front;
+    case rsx::Cull::back: return !front;
+    case rsx::Cull::front_and_back: return true;
+    }
+    return false;
+}
+
+bool passes(rsx::Compare compare, u32 incoming, u32 stored) {
+    switch (compare) {
+    case rsx::Compare::never: return false;
+    case rsx::Compare::less: return incoming < stored;
+    case rsx::Compare::equal: return incoming == stored;
+    case rsx::Compare::less_equal: return incoming <= stored;
+    case rsx::Compare::greater: return incoming > stored;
+    case rsx::Compare::not_equal: return incoming != stored;
+    case rsx::Compare::greater_equal: return incoming >= stored;
+    case rsx::Compare::always: return true;
+    }
+    return false;
+}
 
 } // namespace
 
@@ -113,11 +193,11 @@ std::optional<std::string> ReferenceBackend::draw(const rsx::DrawRequest& reques
         vertex.inverse_w = reciprocal(position[3]);
         const auto window = [&](int axis) {
             const Float ndc = multiply(position[axis], vertex.inverse_w);
-            const Float pixels =
-                multiply_add(ndc, request.viewport_scale[axis], request.viewport_offset[axis]);
-            return to_integer(multiply(pixels, k_16));
+            return multiply_add(ndc, request.viewport_scale[axis], request.viewport_offset[axis]);
         };
-        vertex.window = {window(0), window(1)};
+        vertex.window = {to_integer(multiply(window(0), k_16)),
+                         to_integer(multiply(window(1), k_16))};
+        vertex.window_z = window(2);
         if (std::abs(vertex.window.x) > k_max_subpixels ||
             std::abs(vertex.window.y) > k_max_subpixels) {
             return "vertices far outside the viewport need clipping, which is not supported yet";
@@ -125,67 +205,87 @@ std::optional<std::string> ReferenceBackend::draw(const rsx::DrawRequest& reques
         shaded[index] = vertex;
     }
 
-    // The fragment program's inputs that come from vertex outputs.
-    std::vector<std::pair<u32, u32>> varyings; // fragment input, vertex output
+    Varyings varyings;
     for (u32 input = 0; input < rsx::fragment::k_input_count; ++input) {
         if (const auto output = vertex_output_for(input)) varyings.emplace_back(input, *output);
     }
 
+    const TextureSampler sampler(memory_, request);
     std::optional<std::string> error;
-    s64 cached_area = 0;
-    Float inverse_area = k_zero;
-    for (const auto& triangle : assemble(request.primitive, request.vertices.size())) {
-        std::array<const ShadedVertex*, 3> v{};
+    for (const auto& corners : assemble(request.primitive, request.vertices.size())) {
+        Triangle triangle;
+        std::array<FixedPoint, 3> window{};
         for (int i = 0; i < 3; ++i) {
-            v[i] = &shaded.at(request.vertices[triangle[i]]);
+            triangle.vertices[i] = &shaded.at(request.vertices[corners[i]]);
+            window[i] = triangle.vertices[i]->window;
         }
-        rasterize({v[0]->window, v[1]->window, v[2]->window}, request.area,
-                  [&](u32 x, u32 y, const std::array<s64, 3>& weights, s64 area) {
-                      if (error) return;
-                      std::array<Vec4, rsx::fragment::k_input_count> inputs{};
-                      inputs[rsx::fragment::k_input_position] = {add(from_integer(x), k_half),
-                                                                 add(from_integer(y), k_half),
-                                                                 k_zero, k_one};
+        const s64 area = signed_area(window);
+        if (area == 0 || is_culled(request, area)) continue;
+        triangle.inverse_area = reciprocal(from_integer(std::abs(area)));
 
-                      // Perspective-correct weights: each vertex's share, divided by its w.
-                      if (area != cached_area) {
-                          cached_area = area;
-                          inverse_area = reciprocal(from_integer(area));
-                      }
-                      std::array<Float, 3> q{};
-                      Float sum = k_zero;
-                      for (int i = 0; i < 3; ++i) {
-                          q[i] = multiply(multiply(from_integer(weights[i]), inverse_area),
-                                          v[i]->inverse_w);
-                          sum = add(sum, q[i]);
-                      }
-                      const Float inverse_sum = reciprocal(sum);
-                      for (const auto& [input, output] : varyings) {
-                          for (int c = 0; c < 4; ++c) {
-                              if (request.flat_shading) {
-                                  // UNVERIFIED: the last vertex provides flat-shaded values.
-                                  inputs[input][c] = v[2]->outputs[output][c];
-                                  continue;
-                              }
-                              Float value = k_zero;
-                              for (int i = 0; i < 3; ++i) {
-                                  value = multiply_add(q[i], v[i]->outputs[output][c], value);
-                              }
-                              inputs[input][c] = multiply(value, inverse_sum);
-                          }
-                      }
+        rasterize(window, request.area, [&](const Quad& quad) {
+            if (error) return;
+            const QuadInputs inputs = interpolate(request, triangle, varyings, quad);
 
-                      const rsx::fragment::Result result =
-                          rsx::fragment::run(request.fragment_program, inputs);
-                      if (result.error) {
-                          error = result.error;
-                          return;
-                      }
-                      write_pixel(request, x, y, result.color);
-                  });
+            u32 visible = quad.covered;
+            std::array<u32, 4> depth_values{};
+            for (u32 lane = 0; lane < 4 && request.depth_test; ++lane) {
+                if ((visible & (1u << lane)) == 0) continue;
+                depth_values[lane] = depth_value(*request.depth_test, inputs.depth[lane]);
+                const u32 stored =
+                    read_depth(*request.depth_test, quad.x + lane % 2, quad.y + lane / 2);
+                if (!passes(request.depth_test->compare, depth_values[lane], stored)) {
+                    visible &= ~(1u << lane);
+                }
+            }
+            if (visible == 0) return;
+
+            const rsx::fragment::QuadResult result =
+                rsx::fragment::run(request.fragment_program, inputs.inputs, &sampler);
+            if (result.error) {
+                error = result.error;
+                return;
+            }
+            for (u32 lane = 0; lane < 4; ++lane) {
+                if ((visible & (1u << lane)) == 0) continue;
+                const u32 x = quad.x + lane % 2;
+                const u32 y = quad.y + lane / 2;
+                write_pixel(request, x, y, result.colors[lane]);
+                if (request.depth_test && request.depth_test->write) {
+                    write_depth(*request.depth_test, x, y, depth_values[lane]);
+                }
+            }
+        });
         if (error) return error;
     }
     return std::nullopt;
+}
+
+// Window z, clamped to 0..1, as a depth buffer value. UNVERIFIED: the RSX's clamping and
+// rounding (here to nearest).
+u32 ReferenceBackend::depth_value(const rsx::DepthTest& test, Float z) {
+    const u32 maximum = test.surface.format == rsx::DepthFormat::z16 ? 0xffff : 0xff'ffff;
+    const Float clamped = rsx::shader_ops::saturate(z);
+    return static_cast<u32>(to_integer(multiply(clamped, from_integer(maximum))));
+}
+
+u32 ReferenceBackend::read_depth(const rsx::DepthTest& test, u32 x, u32 y) const {
+    const rsx::DepthSurface& surface = test.surface;
+    if (surface.format == rsx::DepthFormat::z16) {
+        return memory_.read<u16>(surface.address + y * surface.pitch + x * 2);
+    }
+    return memory_.read<u32>(surface.address + y * surface.pitch + x * 4) >> 8;
+}
+
+// Z24S8 keeps its stencil byte.
+void ReferenceBackend::write_depth(const rsx::DepthTest& test, u32 x, u32 y, u32 value) {
+    const rsx::DepthSurface& surface = test.surface;
+    if (surface.format == rsx::DepthFormat::z16) {
+        memory_.write<u16>(surface.address + y * surface.pitch + x * 2, static_cast<u16>(value));
+        return;
+    }
+    const u32 address = surface.address + y * surface.pitch + x * 4;
+    memory_.write<u32>(address, value << 8 | (memory_.read<u32>(address) & 0xff));
 }
 
 // Converts a color to 8 bits per channel (clamped, rounded to nearest) and writes the channels

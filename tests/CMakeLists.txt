@@ -41,6 +41,7 @@ add_executable(ps3emu_tests
     debug/trace_diff_test.cpp
     gpu/msl_test.cpp
     gpu/rasterizer_test.cpp
+    gpu/texture_test.cpp
     hle/cell_gcm_sys_test.cpp
     hle/linker_test.cpp
     hle/nid_test.cpp

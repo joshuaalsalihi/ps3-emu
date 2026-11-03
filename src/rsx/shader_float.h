@@ -32,6 +32,8 @@ Float maximum(Float a, Float b);
 bool less(Float a, Float b); // false if either is NaN
 bool equal(Float a, Float b);
 Float floor(Float a);
+// log2, to about 24 bits after the binary point; -infinity for zero, NaN below it.
+Float log2(Float a);
 Float from_integer(s64 value);
 // Rounds to the nearest integer (ties to even), saturating to the s64 range. NaN gives 0.
 s64 to_integer(Float a);

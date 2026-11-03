@@ -12,7 +12,10 @@
 using rsx::Rsx;
 using test::DrawTest;
 using test::f;
+using test::k_depth;
 using test::k_fragment_program;
+using test::k_indices;
+using test::k_square;
 using test::k_vertices;
 namespace method = rsx::method;
 
@@ -79,11 +82,11 @@ TEST_CASE_METHOD(DrawTest, "the color mask keeps channels") {
 }
 
 TEST_CASE_METHOD(DrawTest, "state we don't support yet is reported") {
-    methods(method::k_depth_test_enable, {1});
+    methods(method::k_blend_enable, {1});
     set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
     draw(method::k_triangles, 3);
     REQUIRE(rsx.error());
-    CHECK(*rsx.error() == "RSX: depth testing is not supported yet");
+    CHECK(*rsx.error() == "RSX: blending is not supported yet");
 }
 
 TEST_CASE_METHOD(DrawTest, "vertices behind the viewer are reported") {
@@ -98,4 +101,104 @@ TEST_CASE_METHOD(DrawTest, "a fragment program in unmapped memory is an error") 
     set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
     draw(method::k_triangles, 3);
     CHECK(rsx.error());
+}
+
+TEST_CASE_METHOD(DrawTest, "an index array picks the vertices") {
+    set_corners(k_red);
+    set_square_indices();
+    draw_indexed(method::k_index_16, 6);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(count(k_red_pixel) == 16 * 8);
+
+    // 32-bit indices, starting at the second triangle's.
+    set_corners({0, 0, 1, 1});
+    for (u32 i = 0; i < 6; ++i) {
+        memory.write<u32>(Rsx::k_local_base + k_indices + 4 * i, k_square[i]);
+    }
+    draw_indexed(method::k_index_32, 3, 3);
+    CHECK(count(0xff00'00ff) == 64); // half the square
+}
+
+TEST_CASE_METHOD(DrawTest, "the depth test keeps the nearer surface, whatever the order") {
+    enable_depth();
+    set_square_indices();
+    set_corners(k_red, 0.5f); // window z 0.75
+    draw_indexed(method::k_index_16, 6);
+    set_corners({0, 1, 0, 1}, -0.5f); // window z 0.25: in front
+    draw_indexed(method::k_index_16, 6);
+    set_corners({0, 0, 1, 1}, 0.0f); // window z 0.5: behind the green
+    draw_indexed(method::k_index_16, 6);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(count(0xff00'ff00) == 16 * 8);
+    // 0.25 * (2^24 - 1) = 4194303.75, rounded to nearest; the stencil byte is kept.
+    CHECK(memory.read<u32>(Rsx::k_local_base + k_depth) == (4194304u << 8 | 0x00));
+
+    // With writes off, a nearer surface draws but leaves the depth alone.
+    methods(method::k_depth_write_enable, {0});
+    set_corners({0, 0, 1, 1}, -0.9f);
+    draw_indexed(method::k_index_16, 6);
+    CHECK(count(0xff00'00ff) == 16 * 8);
+    CHECK(memory.read<u32>(Rsx::k_local_base + k_depth) == (4194304u << 8));
+}
+
+TEST_CASE_METHOD(DrawTest, "GREATER passes only farther surfaces") {
+    enable_depth(method::k_greater);
+    for (u32 i = 0; i < 128 * 8; i += 4) {
+        local(k_depth + i, 0x8000'0000); // depth 0.5
+    }
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}}, k_red); // window z 0.5
+    draw(method::k_triangles, 6);
+    CHECK(count(k_red_pixel) == 0); // 0x800000 is not greater than itself
+}
+
+TEST_CASE_METHOD(DrawTest, "culling drops triangles by their winding on screen") {
+    // This test's viewport doesn't flip y, so the clip-space triangle (-1, -1), (1, -1), (1, 1)
+    // runs right then down on screen: clockwise.
+    methods(method::k_cull_face_enable, {1});
+    methods(method::k_cull_face, {method::k_cull_back});
+    methods(method::k_front_face, {method::k_front_face_ccw});
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
+    draw(method::k_triangles, 3);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(count(k_red_pixel) == 0);
+
+    methods(method::k_front_face, {method::k_front_face_cw});
+    draw(method::k_triangles, 3);
+    CHECK(count(k_red_pixel) == 64);
+
+    for (u32 i = 0; i < 128 * 8; i += 4) {
+        local(i, 0);
+    }
+    methods(method::k_cull_face, {method::k_cull_front_and_back});
+    draw(method::k_triangles, 3);
+    CHECK(count(k_red_pixel) == 0);
+}
+
+TEST_CASE_METHOD(DrawTest, "a fragment program samples a texture through its unit's methods") {
+    use_texture_programs();
+    set_texture();
+    set_textured_square();
+    draw(method::k_triangles, 6);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(pixel(7, 3) == 0xffff'0000);
+    CHECK(pixel(8, 3) == 0xff00'00ff);
+    CHECK(count(0xffff'0000) == 64);
+}
+
+TEST_CASE_METHOD(DrawTest, "sampling a disabled or unsupported texture is an error") {
+    use_texture_programs();
+    set_texture();
+    methods(method::k_texture_control, {0});
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
+    draw(method::k_triangles, 3);
+    REQUIRE(rsx.error());
+    CHECK(*rsx.error() == "RSX: the fragment program samples disabled texture unit 0");
+
+    DrawTest other;
+    other.use_texture_programs();
+    other.set_texture(0x26); // DXT1
+    other.set_vertices({{-1, -1}, {1, -1}, {1, 1}}, k_red);
+    other.draw(method::k_triangles, 3);
+    REQUIRE(other.rsx.error());
+    CHECK(*other.rsx.error() == "RSX: texture unit 0: format 6 is not supported yet");
 }

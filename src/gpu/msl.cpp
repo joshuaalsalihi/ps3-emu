@@ -57,7 +57,7 @@ std::string vertex_source(const rsx::vertex::Instruction& in, const rsx::vertex:
     switch (source.type) {
     case SourceType::temp: value = std::format("r[{}]", source.temp); break;
     case SourceType::input: value = std::format("v[{}]", in.input); break;
-    case SourceType::constant: value = std::format("c[{}]", in.constant); break;
+    case SourceType::constant: value = std::format("constants[{}]", in.constant); break;
     case SourceType::unused: break;
     }
     return modify(value, source.swizzle, source.absolute, source.negate);
@@ -159,6 +159,21 @@ std::string fragment_source(const rsx::fragment::Instruction& in,
     return modify(value, source.swizzle, source.absolute, source.negate);
 }
 
+// A texture lookup (TEX, TXP, TXB, TXL) with the texture's own LOD bias, in 1/256 levels, added.
+std::optional<std::string> lookup_expression(const rsx::fragment::Instruction& in,
+                                             const rsx::Texture& texture) {
+    const std::string unit = std::format("t{0}.sample(s{0}, ", in.texture_unit);
+    const std::string bias = std::format("{:#x}p-8", texture.lod_bias);
+    const std::string texture_bias = texture.lod_bias == 0 ? "" : ", bias(" + bias + ")";
+    switch (in.opcode) {
+    case 0x17: return unit + "a.xy" + texture_bias + ")";
+    case 0x18: return unit + "a.xy / a.w" + texture_bias + ")";
+    case 0x31: return unit + "a.xy, bias(a.w + " + bias + "))";
+    case 0x2f: return unit + "a.xy, level(a.w + " + bias + "))";
+    default: return std::nullopt;
+    }
+}
+
 std::optional<std::string> fragment_expression(u32 opcode) {
     switch (opcode) {
     case 0x01: return "a";
@@ -167,6 +182,7 @@ std::optional<std::string> fragment_expression(u32 opcode) {
     case 0x04: return "a * b + c";
     case 0x05: return "float4(dot(a.xyz, b.xyz))";
     case 0x06: return "float4(dot(a, b))";
+    case 0x07: return "float4(1.0, a.y * b.y, a.z, b.w)";
     case 0x08: return "min(a, b)";
     case 0x09: return "max(a, b)";
     case 0x0a: return set_if("<");
@@ -177,14 +193,20 @@ std::optional<std::string> fragment_expression(u32 opcode) {
     case 0x0f: return set_if("==");
     case 0x10: return "fract(a)";
     case 0x11: return "floor(a)";
+    case 0x15: return "dfdx(a)";
+    case 0x16: return "dfdy(a)";
     case 0x1a: return "float4(1.0 / a.x)";
+    case 0x1b: return "float4(rsqrt(abs(a.x)))";
+    case 0x20: return "float4(1.0)";
+    case 0x21: return "float4(0.0)";
+    case 0x38: return "float4(dot(a.xy, b.xy))";
     case 0x3a: return "a / b.x";
     default: return std::nullopt;
     }
 }
 
 std::optional<std::string> translate_fragment(const rsx::fragment::Program& program,
-                                              std::string& body) {
+                                              const Textures& textures, std::string& body) {
     for (const rsx::fragment::Instruction& in : program) {
         if (in.opcode == 0) continue;
         const bool half =
@@ -193,7 +215,11 @@ std::optional<std::string> translate_fragment(const rsx::fragment::Program& prog
         if (half) return "fp16 fragment program registers";
         if (in.conditional || in.is_branch) return "fragment program flow control";
         if (in.scale != 0) return "fragment program output scaling";
-        const auto expression = fragment_expression(in.opcode);
+        const auto& texture = textures[in.texture_unit];
+        if (rsx::fragment::is_texture_lookup(in) && !texture) return "a missing texture";
+        const auto expression = rsx::fragment::is_texture_lookup(in)
+                                    ? lookup_expression(in, *texture)
+                                    : fragment_expression(in.opcode);
         if (!expression) return std::format("fragment opcode {:#x}", in.opcode);
         body += "    {\n";
         body += std::format("    float4 a = {};\n    float4 b = {};\n    float4 c = {};\n",
@@ -211,7 +237,8 @@ std::optional<std::string> translate_fragment(const rsx::fragment::Program& prog
 } // namespace
 
 MslTranslation translate_to_msl(const std::vector<rsx::vertex::Instruction>& vertex_program,
-                                const rsx::fragment::Program& fragment_program, bool flat_shading) {
+                                const rsx::fragment::Program& fragment_program, bool flat_shading,
+                                const Textures& textures) {
     using namespace rsx;
     MslTranslation translation;
     std::string vertex_body;
@@ -220,7 +247,7 @@ MslTranslation translate_to_msl(const std::vector<rsx::vertex::Instruction>& ver
         translation.error = *missing + " can't be translated to Metal yet";
         return translation;
     }
-    if (auto missing = translate_fragment(fragment_program, fragment_body)) {
+    if (auto missing = translate_fragment(fragment_program, textures, fragment_body)) {
         translation.error = *missing + " can't be translated to Metal yet";
         return translation;
     }
@@ -233,6 +260,13 @@ MslTranslation translate_to_msl(const std::vector<rsx::vertex::Instruction>& ver
     std::string copy_outputs;
     for (u32 i = 1; i < vertex::k_output_count; ++i) {
         copy_outputs += std::format("    out.o{} = o[{}];\n", i, i);
+    }
+    std::string texture_parameters;
+    for (u32 unit = 0; unit < textures.size(); ++unit) {
+        if (!textures[unit]) continue;
+        texture_parameters += std::format(",\n                              texture2d<float> t{0} "
+                                          "[[texture({0})]], sampler s{0} [[sampler({0})]]",
+                                          unit);
     }
     std::string fragment_inputs =
         std::format("    f[{}] = float4(in.position.xy, 0.0, 1.0);\n", fragment::k_input_position);
@@ -258,7 +292,7 @@ struct Viewport {{
 }};
 
 vertex Varyings vertex_main(uint id [[vertex_id]], device const float4* inputs [[buffer(0)]],
-                            constant float4* c [[buffer(1)]],
+                            constant float4* constants [[buffer(1)]],
                             constant Viewport& viewport [[buffer(2)]]) {{
     float4 v[{}];
     for (int i = 0; i < {}; ++i) v[i] = inputs[id * {} + i];
@@ -274,14 +308,14 @@ vertex Varyings vertex_main(uint id [[vertex_id]], device const float4* inputs [
 {}    return out;
 }}
 
-fragment float4 fragment_main(Varyings in [[stage_in]]) {{
+fragment float4 fragment_main(Varyings in [[stage_in]]{}) {{
     float4 f[{}] = {{}};
 {}    float4 r[{}] = {{}};
 {}    return r[0];
 }}
 )",
         varyings, vertex::k_input_count, vertex::k_input_count, vertex::k_input_count,
-        vertex::k_temp_count, vertex::k_output_count, vertex_body, copy_outputs,
+        vertex::k_temp_count, vertex::k_output_count, vertex_body, copy_outputs, texture_parameters,
         fragment::k_input_count, fragment_inputs, fragment::k_temp_count, fragment_body);
     return translation;
 }

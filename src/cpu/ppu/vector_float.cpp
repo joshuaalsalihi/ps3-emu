@@ -12,6 +12,7 @@
 
 #include "common/float_bits.h"
 #include "common/soft_float.h"
+#include "common/soft_float_math.h"
 #include "cpu/ppu/vector_ops.h"
 
 #include <bit>
@@ -228,28 +229,6 @@ void vrsqrtefp(Thread& t, Instruction op) {
     each_word(t, op, [](Mode m, u32, u32 b, u32) { return reciprocal_square_root_estimate(m, b); });
 }
 
-// log2 of a positive, finite, nonzero value (a normal double, as every decoded element is): its
-// exponent plus log2 of its significand m, whose bits come one at a time from repeated
-// squaring. If m² ≥ 2 the next bit is 1, and m is halved.
-u64 log2_of(u64 x) {
-    sf::Flags flags;
-    const s64 exponent = static_cast<s64>((x >> 52) & 0x7ff) - 1023;
-    u64 significand = (x & ((u64{1} << 52) - 1)) | k_one; // in [1, 2)
-
-    s64 fraction = 0;
-    for (int bit = 0; bit < 24; ++bit) {
-        significand = sf::multiply(significand, significand, sf::k_double, {}, flags);
-        fraction <<= 1;
-        if (((significand >> 52) & 0x7ff) >= 1024) { // ≥ 2
-            fraction |= 1;
-            significand -= u64{1} << 52; // halve
-        }
-    }
-    const u64 scaled =
-        sf::from_integer(exponent * (s64{1} << 24) + fraction, sf::k_double, {}, flags);
-    return sf::is_zero(scaled) ? 0 : scaled - (u64{24} << 52); // ÷ 2^24, exactly
-}
-
 u32 log2_estimate(Mode m, u32 b) {
     if (const auto nan = nan_result(m, {b})) return *nan;
     u64 x = decode(b, m);
@@ -262,7 +241,7 @@ u32 log2_estimate(Mode m, u32 b) {
     if (sf::is_infinity(x)) return k_single_infinity;
 
     sf::Flags flags;
-    return encode(sf::round_to_format(log2_of(x), format(m), environment(m), flags), flags, m);
+    return encode(sf::round_to_format(sf::log2(x), format(m), environment(m), flags), flags, m);
 }
 
 void vlogefp(Thread& t, Instruction op) {

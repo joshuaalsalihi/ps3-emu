@@ -2,6 +2,7 @@
 
 #include "common/float_bits.h"
 #include "common/soft_float.h"
+#include "common/soft_float_math.h"
 
 namespace rsx::shader_float {
 
@@ -99,6 +100,15 @@ Float floor(Float a) {
     if (is_nan(a)) return k_default_nan;
     return double_to_single_bits(
         soft_float::round_to_integral(wide(a), soft_float::Rounding::toward_negative));
+}
+
+Float log2(Float a) {
+    if (is_nan(a) || ((a & k_sign) && !is_zero(a))) return k_default_nan;
+    if (is_zero(a)) return k_sign | 0x7f80'0000;
+    if (is_infinity(a)) return a;
+    return single([&](auto format, auto environment, auto& flags) {
+        return soft_float::round_to_format(soft_float::log2(wide(a)), format, environment, flags);
+    });
 }
 
 Float from_integer(s64 value) {

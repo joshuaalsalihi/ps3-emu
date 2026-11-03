@@ -15,6 +15,8 @@
 
 namespace rsx {
 
+constexpr u32 k_texture_units = 16;
+
 // Color surface formats (the low 5 bits of SURFACE_FORMAT). PSL1GHT, rsx/gcm_sys.h:
 // GCM_SURFACE_*.
 enum class ColorFormat : u32 {
@@ -66,7 +68,79 @@ struct VertexInput {
 
 enum class Primitive { triangles, triangle_strip, triangle_fan };
 
-// Draws primitives into one color surface, with no depth test or blending (yet).
+// Comparison functions for the depth test (method::k_never ... k_always).
+enum class Compare : u32 {
+    never = 0x200,
+    less,
+    equal,
+    less_equal,
+    greater,
+    not_equal,
+    greater_equal,
+    always,
+};
+
+struct DepthTest {
+    DepthSurface surface;
+    Compare compare = Compare::less;
+    bool write = true;
+};
+
+enum class Cull { none, front, back, front_and_back };
+
+// Texture formats we decode: the low 5 bits of the format byte. PSL1GHT, rsx/gcm_sys.h:
+// GCM_TEXTURE_FORMAT_*. The D formats have no alpha channel: alpha reads as 1.
+enum class TextureFormat : u32 {
+    a1r5g5b5 = 2,
+    a4r4g4b4 = 3,
+    r5g6b5 = 4,
+    a8r8g8b8 = 5,
+    d1r5g5b5 = 29,
+    d8r8g8b8 = 30,
+};
+
+// What happens to coordinates outside 0..1. GCM_TEXTURE_REPEAT ...
+enum class TextureWrap : u32 {
+    repeat = 1,
+    mirrored_repeat = 2,
+    clamp_to_edge = 3,
+    border = 4,
+};
+
+// GCM_TEXTURE_NEAREST ... The mipmap filters choose between levels as well as within one.
+enum class TextureFilter : u32 {
+    nearest = 1,
+    linear = 2,
+    nearest_mipmap_nearest = 3,
+    linear_mipmap_nearest = 4,
+    nearest_mipmap_linear = 5,
+    linear_mipmap_linear = 6,
+};
+
+// A 2D texture a fragment program samples. Its mipmap levels follow level 0 in memory, each half
+// the size of the one before (but at least 1x1).
+struct Texture {
+    u32 address = 0; // guest address of level 0's first texel
+    TextureFormat format = TextureFormat::a8r8g8b8;
+    bool linear = false;    // rows `pitch` bytes apart; otherwise swizzled (see gpu/texture.h)
+    bool normalized = true; // coordinates 0..1 span the texture; otherwise they count texels
+    u32 width = 1;
+    u32 height = 1;
+    u32 pitch = 0;
+    u32 levels = 1;
+    u32 remap = 0; // which channel each output reads (the low 16 bits of method::k_texture_remap)
+    TextureWrap wrap_s = TextureWrap::repeat;
+    TextureWrap wrap_t = TextureWrap::repeat;
+    TextureFilter minify = TextureFilter::nearest;
+    TextureFilter magnify = TextureFilter::nearest;
+    u32 border_color = 0; // A8R8G8B8
+    // The level of detail's range and bias, in 1/256 levels.
+    u32 min_lod = 0;
+    u32 max_lod = 0;
+    s32 lod_bias = 0;
+};
+
+// Draws primitives into one color surface, with no blending (yet).
 struct DrawRequest {
     Primitive primitive = Primitive::triangles;
     std::vector<u32> vertices; // vertex indices, in the order they make primitives
@@ -79,6 +153,12 @@ struct DrawRequest {
     ColorSurface target;
     u32 color_mask = 0; // method::k_color_mask
     bool flat_shading = false;
+    std::optional<DepthTest> depth_test; // none: no depth test, and no depth writes
+    Cull cull = Cull::none;
+    // Whether counterclockwise triangles face the viewer, as they appear on the display.
+    bool front_ccw = true;
+    // The textures the fragment program samples, by unit.
+    std::array<std::optional<Texture>, k_texture_units> textures;
 };
 
 // A frame as it reaches the display: 8-bit RGB, top row first.

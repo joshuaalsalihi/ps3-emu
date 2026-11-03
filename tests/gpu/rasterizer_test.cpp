@@ -18,8 +18,11 @@ constexpr rsx::Rect k_everything = {0, 0, 64, 64};
 std::vector<std::pair<u32, u32>> covered(const std::array<FixedPoint, 3>& triangle,
                                          const rsx::Rect& area = k_everything) {
     std::vector<std::pair<u32, u32>> pixels;
-    gpu::rasterize(triangle, area, [&](u32 x, u32 y, const std::array<s64, 3>&, s64) {
-        pixels.emplace_back(x, y);
+    gpu::rasterize(triangle, area, [&](const gpu::Quad& quad) {
+        for (u32 lane = 0; lane < 4; ++lane) {
+            if (quad.covered & (1u << lane))
+                pixels.emplace_back(quad.x + lane % 2, quad.y + lane / 2);
+        }
     });
     return pixels;
 }
@@ -85,13 +88,34 @@ TEST_CASE("a triangle with no area covers nothing") {
 }
 
 TEST_CASE("the weights are each vertex's share of the area") {
-    gpu::rasterize({at(0, 0), at(64, 0), at(0, 64)}, k_everything,
-                   [](u32 x, u32 y, const std::array<s64, 3>& weights, s64 area) {
-                       CHECK(weights[0] + weights[1] + weights[2] == area);
-                       if (x == 0 && y == 0) {
-                           // The center (8, 8): vertex 1's share is 8 * 64, as is vertex 2's.
-                           CHECK(weights[1] == 8 * 64);
-                           CHECK(weights[2] == 8 * 64);
-                       }
-                   });
+    gpu::rasterize({at(0, 0), at(64, 0), at(0, 64)}, k_everything, [](const gpu::Quad& quad) {
+        for (const auto& weights : quad.weights) {
+            CHECK(weights[0] + weights[1] + weights[2] == quad.area);
+        }
+        if (quad.x == 0 && quad.y == 0) {
+            // Lane 0's center (8, 8): vertex 1's share is 8 * 64, as is vertex 2's.
+            CHECK(quad.weights[0][1] == 8 * 64);
+            CHECK(quad.weights[0][2] == 8 * 64);
+        }
+    });
+}
+
+TEST_CASE("quads are aligned and hold helper lanes outside the triangle") {
+    // A triangle covering only pixel (1, 1): its quad is the one at (0, 0), with lane 3 covered.
+    std::vector<gpu::Quad> quads;
+    gpu::rasterize({at(16, 16), at(48, 16), at(16, 48)}, k_everything,
+                   [&](const gpu::Quad& quad) { quads.push_back(quad); });
+    REQUIRE(quads.size() == 1);
+    CHECK(quads[0].x == 0);
+    CHECK(quads[0].y == 0);
+    CHECK(quads[0].covered == 0b1000);
+    // Lane 0, the pixel up and to the left, lies outside: one of its weights is negative.
+    const auto& outside = quads[0].weights[0];
+    CHECK((outside[0] < 0 || outside[1] < 0 || outside[2] < 0));
+}
+
+TEST_CASE("the signed area is positive for triangles clockwise on screen") {
+    // y grows downward, so right then down is clockwise.
+    CHECK(gpu::signed_area({at(0, 0), at(16, 0), at(0, 16)}) > 0);
+    CHECK(gpu::signed_area({at(0, 0), at(0, 16), at(16, 0)}) < 0);
 }

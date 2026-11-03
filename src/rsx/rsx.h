@@ -134,7 +134,11 @@ private:
     void clear_surface(u32 mask);
     std::optional<ColorSurface> color_surface();
     Rect drawing_area() const;
+    void read_indices(u32 first, u32 count);
     void end_primitive();
+    bool set_depth_test(DrawRequest& request);
+    bool set_culling(DrawRequest& request);
+    std::optional<Texture> texture(u32 unit);
     void queue_flip(u32 id);
     void complete_flip();
     u64 next_vblank() const;

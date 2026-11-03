@@ -1,11 +1,17 @@
 #include "gpu/metal_backend.h"
 
 #include "gpu/msl.h"
+#include "gpu/texture.h"
 #include "gpu/vertex_input.h"
 #include "rsx/methods.h"
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
+#include <cstring>
+#include <format>
 #include <map>
+#include <tuple>
 #include <vector>
 
 #import <Metal/Metal.h>
@@ -15,8 +21,9 @@ namespace gpu {
 struct MetalBackend::Device {
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
-    // Compiled pipelines by their shader source and color write mask.
-    std::map<std::pair<std::string, MTLColorWriteMask>, id<MTLRenderPipelineState>> pipelines;
+    // Compiled pipelines by their shader source, color write mask and depth format.
+    std::map<std::tuple<std::string, MTLColorWriteMask, MTLPixelFormat>, id<MTLRenderPipelineState>>
+        pipelines;
 };
 
 namespace {
@@ -48,6 +55,145 @@ MTLColorWriteMask write_mask(const rsx::DrawRequest& request) {
     return mask;
 }
 
+bool uses_mipmaps(rsx::TextureFilter filter) {
+    return filter != rsx::TextureFilter::nearest && filter != rsx::TextureFilter::linear;
+}
+
+MTLSamplerMinMagFilter min_mag_filter(rsx::TextureFilter filter) {
+    switch (filter) {
+    case rsx::TextureFilter::linear:
+    case rsx::TextureFilter::linear_mipmap_nearest:
+    case rsx::TextureFilter::linear_mipmap_linear: return MTLSamplerMinMagFilterLinear;
+    default: return MTLSamplerMinMagFilterNearest;
+    }
+}
+
+MTLSamplerAddressMode address_mode(rsx::TextureWrap wrap) {
+    switch (wrap) {
+    case rsx::TextureWrap::repeat: return MTLSamplerAddressModeRepeat;
+    case rsx::TextureWrap::mirrored_repeat: return MTLSamplerAddressModeMirrorRepeat;
+    case rsx::TextureWrap::clamp_to_edge: return MTLSamplerAddressModeClampToEdge;
+    case rsx::TextureWrap::border: return MTLSamplerAddressModeClampToBorderColor;
+    }
+    return MTLSamplerAddressModeRepeat;
+}
+
+// How many levels a texture keeps: those its filter can reach, as many as Metal allows.
+u32 level_count(const rsx::Texture& texture) {
+    if (!texture.normalized || !uses_mipmaps(texture.minify)) return 1;
+    const u32 largest = std::max(texture.width, texture.height);
+    return std::min(texture.levels, static_cast<u32>(std::bit_width(largest)));
+}
+
+MTLCompareFunction compare_function(rsx::Compare compare) {
+    switch (compare) {
+    case rsx::Compare::never: return MTLCompareFunctionNever;
+    case rsx::Compare::less: return MTLCompareFunctionLess;
+    case rsx::Compare::equal: return MTLCompareFunctionEqual;
+    case rsx::Compare::less_equal: return MTLCompareFunctionLessEqual;
+    case rsx::Compare::greater: return MTLCompareFunctionGreater;
+    case rsx::Compare::not_equal: return MTLCompareFunctionNotEqual;
+    case rsx::Compare::greater_equal: return MTLCompareFunctionGreaterEqual;
+    case rsx::Compare::always: return MTLCompareFunctionAlways;
+    }
+    return MTLCompareFunctionAlways;
+}
+
+constexpr float k_z24_maximum = 16777215.0f;
+
+// Uploads a texture's levels, decoded (and remapped) the reference backend's way, as RGBA8.
+id<MTLTexture> upload_texture(id<MTLDevice> device, const Memory& memory,
+                              const rsx::Texture& texture) {
+    const u32 levels = level_count(texture);
+    MTLTextureDescriptor* descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                           width:texture.width
+                                                          height:texture.height
+                                                       mipmapped:NO];
+    descriptor.mipmapLevelCount = levels;
+    descriptor.usage = MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeShared;
+    id<MTLTexture> result = [device newTextureWithDescriptor:descriptor];
+    for (u32 level = 0; level < levels; ++level) {
+        const LevelSize size = level_size(texture, level);
+        std::vector<u8> texels;
+        texels.reserve(std::size_t{size.width} * size.height * 4);
+        for (u32 y = 0; y < size.height; ++y) {
+            for (u32 x = 0; x < size.width; ++x) {
+                for (const u32 channel : read_texel(memory, texture, level, x, y)) {
+                    const float value = std::clamp(host_float(channel), 0.0f, 1.0f);
+                    texels.push_back(static_cast<u8>(std::lround(value * 255.0f)));
+                }
+            }
+        }
+        [result replaceRegion:MTLRegionMake2D(0, 0, size.width, size.height)
+                  mipmapLevel:level
+                    withBytes:texels.data()
+                  bytesPerRow:size.width * 4];
+    }
+    return result;
+}
+
+// The sampler for a texture; nil, with `error` set, if Metal can't sample it as the RSX would.
+id<MTLSamplerState> make_sampler(id<MTLDevice> device, const rsx::Texture& texture,
+                                 std::string& error) {
+    MTLSamplerDescriptor* descriptor = [MTLSamplerDescriptor new];
+    descriptor.minFilter = min_mag_filter(texture.minify);
+    descriptor.magFilter = min_mag_filter(texture.magnify);
+    descriptor.mipFilter = level_count(texture) == 1 ? MTLSamplerMipFilterNotMipmapped
+                           : (texture.minify == rsx::TextureFilter::nearest_mipmap_linear ||
+                              texture.minify == rsx::TextureFilter::linear_mipmap_linear)
+                               ? MTLSamplerMipFilterLinear
+                               : MTLSamplerMipFilterNearest;
+    descriptor.sAddressMode = address_mode(texture.wrap_s);
+    descriptor.tAddressMode = address_mode(texture.wrap_t);
+    descriptor.normalizedCoordinates = texture.normalized;
+    descriptor.lodMinClamp = static_cast<float>(texture.min_lod) / 256.0f;
+    descriptor.lodMaxClamp = static_cast<float>(texture.max_lod) / 256.0f;
+    if (!texture.normalized &&
+        (texture.wrap_s != rsx::TextureWrap::clamp_to_edge ||
+         texture.wrap_t != rsx::TextureWrap::clamp_to_edge || texture.minify != texture.magnify)) {
+        error = "Metal samples unnormalized textures only clamped, with one filter";
+        return nil;
+    }
+    if (texture.wrap_s == rsx::TextureWrap::border || texture.wrap_t == rsx::TextureWrap::border) {
+        switch (texture.border_color) {
+        case 0x0000'0000: descriptor.borderColor = MTLSamplerBorderColorTransparentBlack; break;
+        case 0xff00'0000: descriptor.borderColor = MTLSamplerBorderColorOpaqueBlack; break;
+        case 0xffff'ffff: descriptor.borderColor = MTLSamplerBorderColorOpaqueWhite; break;
+        default:
+            error = std::format("Metal can't use the border color {:#010x}", texture.border_color);
+            return nil;
+        }
+    }
+    return [device newSamplerStateWithDescriptor:descriptor];
+}
+
+// Copies the drawing area's depth back to guest memory; Z24S8 keeps its stencil byte.
+void write_back_depth(Memory& memory, const rsx::DrawRequest& request, id<MTLBuffer> depth_buffer,
+                      u32 width) {
+    const rsx::DepthSurface& surface = request.depth_test->surface;
+    const rsx::Rect& area = request.area;
+    const auto* values = static_cast<const u8*>(depth_buffer.contents);
+    for (u32 y = area.y; y < area.y + area.height; ++y) {
+        for (u32 x = area.x; x < area.x + area.width; ++x) {
+            const std::size_t index = std::size_t{y} * width + x;
+            if (surface.format == rsx::DepthFormat::z16) {
+                u16 value;
+                std::memcpy(&value, values + index * 2, 2);
+                memory.write<u16>(surface.address + y * surface.pitch + x * 2, value);
+                continue;
+            }
+            float value;
+            std::memcpy(&value, values + index * 4, 4);
+            const u32 depth =
+                static_cast<u32>(std::lround(std::clamp(value, 0.0f, 1.0f) * k_z24_maximum));
+            const u32 address = surface.address + y * surface.pitch + x * 4;
+            memory.write<u32>(address, depth << 8 | (memory.read<u32>(address) & 0xff));
+        }
+    }
+}
+
 } // namespace
 
 std::unique_ptr<MetalBackend> MetalBackend::create(Memory& memory, std::string& error) {
@@ -67,13 +213,23 @@ MetalBackend::MetalBackend(Memory& memory, std::unique_ptr<Device> device)
 MetalBackend::~MetalBackend() = default;
 
 std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
-    const MslTranslation msl = translate_to_msl(request.vertex_program.instructions,
-                                                request.fragment_program, request.flat_shading);
+    if (request.cull == rsx::Cull::front_and_back) return std::nullopt; // nothing is drawn
+    const MslTranslation msl =
+        translate_to_msl(request.vertex_program.instructions, request.fragment_program,
+                         request.flat_shading, request.textures);
     if (msl.error) return msl.error;
 
-    // The pipeline: compile the shaders the first time this program and mask are seen.
+    // The pipeline: compile the shaders the first time this program, mask and depth format are
+    // seen. Z24 depth is held as 32-bit floats, since Apple GPUs have no 24-bit format.
     const MTLColorWriteMask mask = write_mask(request);
-    __strong id<MTLRenderPipelineState>& pipeline = device_->pipelines[{msl.source, mask}];
+    MTLPixelFormat depth_format = MTLPixelFormatInvalid;
+    if (request.depth_test) {
+        depth_format = request.depth_test->surface.format == rsx::DepthFormat::z16
+                           ? MTLPixelFormatDepth16Unorm
+                           : MTLPixelFormatDepth32Float;
+    }
+    __strong id<MTLRenderPipelineState>& pipeline =
+        device_->pipelines[{msl.source, mask, depth_format}];
     if (!pipeline) {
         MTLCompileOptions* options = [MTLCompileOptions new];
         options.mathMode = MTLMathModeSafe;
@@ -88,6 +244,7 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
         descriptor.fragmentFunction = [library newFunctionWithName:@"fragment_main"];
         descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
         descriptor.colorAttachments[0].writeMask = mask;
+        descriptor.depthAttachmentPixelFormat = depth_format;
         pipeline = [device_->device newRenderPipelineStateWithDescriptor:descriptor error:&error];
         if (!pipeline) return "Metal pipeline creation failed: " + describe(error);
     }
@@ -160,8 +317,88 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
 
     id<MTLCommandBuffer> commands = [device_->queue commandBuffer];
+
+    // The depth buffer, loaded from guest memory through a buffer (depth textures are private).
+    id<MTLTexture> depth = nil;
+    id<MTLBuffer> depth_buffer = nil;
+    const std::size_t depth_bytes = depth_format == MTLPixelFormatDepth16Unorm ? 2 : 4;
+    if (request.depth_test) {
+        const rsx::DepthSurface& surface = request.depth_test->surface;
+        depth_buffer =
+            [device_->device newBufferWithLength:std::size_t{width} * height * depth_bytes
+                                         options:MTLResourceStorageModeShared];
+        auto* values = static_cast<u8*>(depth_buffer.contents);
+        for (u32 y = 0; y < height; ++y) {
+            for (u32 x = 0; x < width; ++x) {
+                u8* out = values + (std::size_t{y} * width + x) * depth_bytes;
+                if (depth_bytes == 2) {
+                    const u16 value =
+                        memory_.read<u16>(surface.address + y * surface.pitch + x * 2);
+                    std::memcpy(out, &value, 2);
+                } else {
+                    const u32 stored =
+                        memory_.read<u32>(surface.address + y * surface.pitch + x * 4);
+                    const float value = static_cast<float>(stored >> 8) / k_z24_maximum;
+                    std::memcpy(out, &value, 4);
+                }
+            }
+        }
+        MTLTextureDescriptor* depth_descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:depth_format
+                                                               width:width
+                                                              height:height
+                                                           mipmapped:NO];
+        depth_descriptor.usage = MTLTextureUsageRenderTarget;
+        depth_descriptor.storageMode = MTLStorageModePrivate;
+        depth = [device_->device newTextureWithDescriptor:depth_descriptor];
+        id<MTLBlitCommandEncoder> upload = [commands blitCommandEncoder];
+        [upload copyFromBuffer:depth_buffer
+                   sourceOffset:0
+              sourceBytesPerRow:width * depth_bytes
+            sourceBytesPerImage:std::size_t{width} * height * depth_bytes
+                     sourceSize:MTLSizeMake(width, height, 1)
+                      toTexture:depth
+               destinationSlice:0
+               destinationLevel:0
+              destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [upload endEncoding];
+        pass.depthAttachment.texture = depth;
+        pass.depthAttachment.loadAction = MTLLoadActionLoad;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+    }
+
     id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
     [encoder setRenderPipelineState:pipeline];
+    if (request.depth_test) {
+        MTLDepthStencilDescriptor* depth_state = [MTLDepthStencilDescriptor new];
+        depth_state.depthCompareFunction = compare_function(request.depth_test->compare);
+        depth_state.depthWriteEnabled = request.depth_test->write;
+        [encoder
+            setDepthStencilState:[device_->device newDepthStencilStateWithDescriptor:depth_state]];
+        // The reference clamps depth to 0..1 rather than clipping.
+        [encoder setDepthClipMode:MTLDepthClipModeClamp];
+    }
+    switch (request.cull) {
+    case rsx::Cull::none: [encoder setCullMode:MTLCullModeNone]; break;
+    case rsx::Cull::front: [encoder setCullMode:MTLCullModeFront]; break;
+    case rsx::Cull::back: [encoder setCullMode:MTLCullModeBack]; break;
+    case rsx::Cull::front_and_back: break; // returned early
+    }
+    [encoder
+        setFrontFacingWinding:request.front_ccw ? MTLWindingCounterClockwise : MTLWindingClockwise];
+    for (u32 unit = 0; unit < request.textures.size(); ++unit) {
+        if (!request.textures[unit]) continue;
+        std::string error;
+        id<MTLSamplerState> sampler = make_sampler(device_->device, *request.textures[unit], error);
+        if (!sampler) {
+            [encoder endEncoding];
+            return error;
+        }
+        [encoder
+            setFragmentTexture:upload_texture(device_->device, memory_, *request.textures[unit])
+                       atIndex:unit];
+        [encoder setFragmentSamplerState:sampler atIndex:unit];
+    }
     [encoder
         setViewport:{0.0, 0.0, static_cast<double>(width), static_cast<double>(height), 0.0, 1.0}];
     [encoder setScissorRect:{area.x, area.y, area.width, area.height}];
@@ -177,6 +414,20 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
     [encoder setVertexBuffer:constant_buffer offset:0 atIndex:1];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:vertex_count];
     [encoder endEncoding];
+    const bool writes_depth = request.depth_test && request.depth_test->write;
+    if (writes_depth) {
+        id<MTLBlitCommandEncoder> download = [commands blitCommandEncoder];
+        [download copyFromTexture:depth
+                         sourceSlice:0
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(0, 0, 0)
+                          sourceSize:MTLSizeMake(width, height, 1)
+                            toBuffer:depth_buffer
+                   destinationOffset:0
+              destinationBytesPerRow:width * depth_bytes
+            destinationBytesPerImage:std::size_t{width} * height * depth_bytes];
+        [download endEncoding];
+    }
     [commands commit];
     [commands waitUntilCompleted];
     if (commands.error) return "Metal rendering failed: " + describe(commands.error);
@@ -190,6 +441,7 @@ std::optional<std::string> MetalBackend::draw(const rsx::DrawRequest& request) {
                                u32{in[3]} << 24 | u32{in[2]} << 16 | u32{in[1]} << 8 | in[0]);
         }
     }
+    if (writes_depth) write_back_depth(memory_, request, depth_buffer, width);
     return std::nullopt;
 }
 
