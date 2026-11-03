@@ -42,6 +42,8 @@ public:
             local(k_fragment_program + 4 * i, fragment[i]);
         }
         methods(method::k_shader_program, {k_fragment_program | 1}); // in local memory
+        // The control word libgcm writes with these programs: the result is R0.
+        methods(method::k_shader_control, {0x0200'0440});
 
         const u32 format = method::k_vertex_float | 4 << 4 | k_stride << 8;
         methods(method::k_vertex_data_array_offset, {k_vertices});

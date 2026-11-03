@@ -510,7 +510,8 @@ std::string GdbServer::stop_reply(const RunResult& result) {
         return std::format("W{:02x}", static_cast<u8>(result.exit_status));
     case RunResult::Outcome::faulted: signal = 11; break;
     case RunResult::Outcome::deadlocked: signal = 6; break;
-    case RunResult::Outcome::instruction_limit: signal = 2; break;
+    case RunResult::Outcome::instruction_limit:
+    case RunResult::Outcome::frame_limit: signal = 2; break;
     case RunResult::Outcome::breakpoint:
     case RunResult::Outcome::stepped:
     case RunResult::Outcome::reached: signal = 5; break;

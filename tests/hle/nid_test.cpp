@@ -21,6 +21,7 @@ TEST_CASE("NIDs match the ones in PSL1GHT's cellGcmSys and cellSysutil stub libr
     CHECK(hle::nid("cellGcmSetWaitFlip") == 0x983fb9aa);
     CHECK(hle::nid("cellVideoOutConfigure") == 0x0bae8772);
     CHECK(hle::nid("cellVideoOutGetState") == 0x887572d5);
+    CHECK(hle::nid("cellVideoOutGetResolutionAvailability") == 0xa322db75);
 }
 
 TEST_CASE("HLE function names are unique within each module") {

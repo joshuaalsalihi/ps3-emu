@@ -10,7 +10,7 @@ namespace {
 // A state starts with these bytes, then the format version. A state from another version is
 // rejected rather than misread.
 constexpr std::array<u8, 8> k_magic = {'P', 'S', '3', 'S', 'T', 'A', 'T', 'E'};
-constexpr u32 k_version = 1;
+constexpr u32 k_version = 2;
 
 } // namespace
 

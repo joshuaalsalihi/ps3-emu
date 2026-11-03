@@ -248,8 +248,7 @@ void vlogefp(Thread& t, Instruction op) {
     each_word(t, op, [](Mode m, u32, u32 b, u32) { return log2_estimate(m, b); });
 }
 
-// 2^x: 2^floor(x) times 2^f for the fraction f, built from the factors 2^(2^-k) for each set
-// bit k of f. Each factor is 2 square-rooted k times.
+// 2^x: 2^floor(x) times 2^f for the fraction f.
 u32 power_of_two_estimate(Mode m, u32 b) {
     if (const auto nan = nan_result(m, {b})) return *nan;
     const u64 x = decode(b, m);
@@ -260,18 +259,7 @@ u32 power_of_two_estimate(Mode m, u32 b) {
 
     const u64 whole = sf::round_to_integral(x, sf::Rounding::toward_negative);
     const u64 fraction = sf::add(x, sf::negate(whole), sf::k_double, {}, flags); // exact, in [0, 1)
-    const s64 fraction_bits = sf::to_integer(sf::is_zero(fraction) ? 0 : fraction + (u64{24} << 52),
-                                             64, sf::Rounding::toward_zero, flags)
-                                  .value; // the top 24 bits of the fraction
-
-    u64 result = k_one;
-    u64 factor = 0x4000'0000'0000'0000; // 2.0
-    for (int k = 1; k <= 24; ++k) {
-        factor = sf::square_root(factor, sf::k_double, {}, flags); // 2^(2^-k)
-        if (fraction_bits & (s64{1} << (24 - k))) {
-            result = sf::multiply(result, factor, sf::k_double, {}, flags);
-        }
-    }
+    const u64 result = sf::exp2_fraction(fraction);
 
     // Scale by 2^floor(x), exactly representable as a double.
     const s64 exponent = sf::to_integer(whole, 64, sf::Rounding::toward_zero, flags).value;

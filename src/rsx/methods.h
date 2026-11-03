@@ -81,6 +81,7 @@ constexpr u32 k_texture_filter = 0x1a14;
 constexpr u32 k_texture_image_rect = 0x1a18; // height | width << 16
 constexpr u32 k_texture_border_color = 0x1a1c;
 constexpr u32 k_texture_stride = 0x20;
+constexpr u32 k_shader_control = 0x1d60;      // the fragment program's control word (FP_CONTROL)
 constexpr u32 k_semaphore_offset_3d = 0x1d6c; // the 3D class's own label writes
 constexpr u32 k_back_end_write_semaphore_release = 0x1d70;
 constexpr u32 k_texture_read_semaphore_release = 0x1d74;
@@ -125,6 +126,9 @@ constexpr u32 k_vertex_ubyte = 4; // unsigned bytes, normalized to 0..1
 constexpr u32 k_triangles = 5;
 constexpr u32 k_triangle_strip = 6;
 constexpr u32 k_triangle_fan = 7;
+constexpr u32 k_quads = 8;
+constexpr u32 k_quad_strip = 9;
+constexpr u32 k_polygon = 10;
 
 // k_clear_surface bits. PSL1GHT, rsx/gcm_sys.h: GCM_CLEAR_*.
 constexpr u32 k_clear_depth = 0x01;
@@ -133,6 +137,26 @@ constexpr u32 k_clear_red = 0x10;
 constexpr u32 k_clear_green = 0x20;
 constexpr u32 k_clear_blue = 0x40;
 constexpr u32 k_clear_alpha = 0x80;
+
+// libgcm binds the same object to each subchannel, so a method's meaning follows from its
+// subchannel. UNVERIFIED: the binding, which our HLE libgcm doesn't write; seen in the FIFO.
+constexpr u32 k_subchannel_3d = 0;
+constexpr u32 k_subchannel_surfaces_2d = 3;    // NV04_CONTEXT_SURFACES_2D: where transfers go
+constexpr u32 k_subchannel_image_from_cpu = 5; // NV40_IMAGE_FROM_CPU: data in the FIFO
+
+// 2D surfaces (nouveau: NV04_CONTEXT_SURFACES_2D_*).
+constexpr u32 k_surfaces_2d_destination_context = 0x0188;
+constexpr u32 k_surfaces_2d_format = 0x0300; // see k_surface_2d_y32
+constexpr u32 k_surfaces_2d_pitch = 0x0304;  // source | destination << 16
+constexpr u32 k_surfaces_2d_destination_offset = 0x030c;
+constexpr u32 k_surface_2d_y32 = 0x0b; // one 32-bit value per pixel
+
+// Image from CPU (nouveau: NV01_IMAGE_FROM_CPU_*): pixels written into the 2D surface, row by
+// row, from the words of the COLOR methods.
+constexpr u32 k_image_point = 0x0304;    // x | y << 16
+constexpr u32 k_image_size_out = 0x0308; // width | height << 16: the pixels that are written
+constexpr u32 k_image_size_in = 0x030c;  // width | height << 16: the pixels that are sent
+constexpr u32 k_image_color = 0x0400;    // up to 0x700 bytes of methods: the next pixels
 
 // Methods only our HLE libgcm writes, on a subchannel guest code doesn't use. UNVERIFIED: real
 // libgcm drives flips through the RSX's driver methods, whose encoding we don't know yet.

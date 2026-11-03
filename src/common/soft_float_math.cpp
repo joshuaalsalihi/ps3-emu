@@ -30,4 +30,20 @@ u64 log2(u64 x) {
     return is_zero(scaled) ? 0 : scaled - (u64{24} << 52); // ÷ 2^24, exactly
 }
 
+// The product of the factors 2^(2^-k) for each set bit k of f. Each factor is 2 square-rooted
+// k times.
+u64 exp2_fraction(u64 f) {
+    Flags flags;
+    const s64 bits = to_integer(is_zero(f) ? 0 : f + (u64{24} << 52), 64, Rounding::toward_zero,
+                                flags)
+                         .value; // the top 24 bits of f
+    u64 result = k_one;
+    u64 factor = 0x4000'0000'0000'0000; // 2.0
+    for (int k = 1; k <= 24; ++k) {
+        factor = square_root(factor, k_double, {}, flags); // 2^(2^-k)
+        if (bits & (s64{1} << (24 - k))) result = multiply(result, factor, k_double, {}, flags);
+    }
+    return result;
+}
+
 } // namespace soft_float

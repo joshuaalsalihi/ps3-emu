@@ -74,6 +74,16 @@ void cell_video_out_get_resolution(Kernel& kernel, PpuThread& thread) {
     thread.set_result(lv2::k_ok);
 }
 
+// s32 cellVideoOutGetResolutionAvailability(u32 videoOut, u32 resolutionId, u32 aspect,
+//                                            u32 option)
+// Returns 1 if the display accepts the resolution, else 0. UNVERIFIED: which modes a 720p HDMI
+// display reports; we say 720p, 480p and 576p, in any aspect.
+void cell_video_out_get_resolution_availability(Kernel&, PpuThread& thread) {
+    const u32 id = static_cast<u32>(thread.arg(1));
+    const bool available = thread.arg(0) == k_primary_video_out && (id == 2 || id == 4 || id == 5);
+    thread.set_result(available ? 1 : 0);
+}
+
 // s32 cellVideoOutConfigure(u32 videoOut, videoConfiguration* config, void* option, u32 wait)
 // videoConfiguration: {u8 resolution, u8 format, u8 aspect, u8 padding[9], u32 pitch}.
 void cell_video_out_configure(Kernel& kernel, PpuThread& thread) {
@@ -85,7 +95,9 @@ void cell_video_out_configure(Kernel& kernel, PpuThread& thread) {
     rsx::VideoMode& mode = kernel.rsx->video_mode;
     mode.resolution = resolution;
     mode.format = kernel.memory.read<u8>(config + 1);
-    mode.aspect = kernel.memory.read<u8>(config + 2);
+    // VIDEO_ASPECT_AUTO (0) becomes the display's own aspect.
+    const u8 aspect = kernel.memory.read<u8>(config + 2);
+    mode.aspect = aspect == 0 ? 2 : aspect; // VIDEO_ASPECT_16_9
     mode.pitch = kernel.memory.read<u32>(config + 12);
     thread.set_result(lv2::k_ok);
 }
@@ -106,6 +118,7 @@ void cell_video_out_get_configuration(Kernel& kernel, PpuThread& thread) {
 constexpr FunctionInfo k_functions[] = {
     {"cellVideoOutGetState", cell_video_out_get_state},
     {"cellVideoOutGetResolution", cell_video_out_get_resolution},
+    {"cellVideoOutGetResolutionAvailability", cell_video_out_get_resolution_availability},
     {"cellVideoOutConfigure", cell_video_out_configure},
     {"cellVideoOutGetConfiguration", cell_video_out_get_configuration},
 };

@@ -34,6 +34,14 @@ bool equal(Float a, Float b);
 Float floor(Float a);
 // log2, to about 24 bits after the binary point; -infinity for zero, NaN below it.
 Float log2(Float a);
+// 2^a, from a's top 24 fraction bits.
+Float exp2(Float a);
+
+// The precisions a fragment program instruction can compute in, applied to a single-precision
+// result. UNVERIFIED: fp16 as IEEE half precision (rounded to nearest, overflowing to infinity),
+// and fx12 as 12-bit fixed point: multiples of 2^-10 in [-2, 2), saturating.
+Float round_to_half(Float a);
+Float round_to_fixed12(Float a);
 Float from_integer(s64 value);
 // Rounds to the nearest integer (ties to even), saturating to the s64 range. NaN gives 0.
 s64 to_integer(Float a);

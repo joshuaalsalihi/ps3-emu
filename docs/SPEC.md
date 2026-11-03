@@ -1,6 +1,6 @@
 # PS3 Emulator — Design Spec
 
-**Status:** Draft v0.13 · 2026-11-02 · M7 in progress
+**Status:** Draft v0.14 · 2026-11-03 · M7 in progress
 
 An accuracy-focused PlayStation 3 emulator for research, homebrew development and studying the
 Cell processor. Correctness and debuggability come first; speed comes later.
@@ -332,11 +332,16 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   later; cached by hash). Shader arithmetic uses `soft_float` in single precision. Fragment
   programs run on 2x2 quads of pixels, as on GPUs of the RSX's generation, so `DDX`, `DDY` and
   texture lookups can compare neighbors; lanes outside the triangle still run, as helpers.
+  They have full- and half-precision registers (R and H), compute each instruction at fp32, fp16
+  or 12-bit fixed point, and have a condition code that instructions can set and test to write
+  only some components or (`KIL`) discard the fragment, as Cg's output uses them. Not yet:
+  flow control, output scaling, and programs that write depth.
 - **Draws:** BEGIN_END with DRAW_ARRAYS or an index array (16- or 32-bit) collects vertex
-  indices; ending the primitive builds a draw request (vertex arrays, both programs, viewport,
-  render target, alpha test, depth test, blending, culling, textures). Triangles, strips and
-  fans into one color target; stencil tests, logic operations and several targets aren't
-  supported yet, and enabling them ends the run with a clear "not supported yet" error.
+  indices, for triangles, strips and fans, quads, quad strips and polygons; ending the
+  primitive builds a draw request (vertex arrays, both programs, viewport, render target,
+  alpha test, depth test, blending, culling, textures), into one color target. Points, lines,
+  stencil tests, logic operations and several targets aren't supported yet, and enabling them
+  ends the run with a clear "not supported yet" error.
   Registers a program never writes start as OpenGL's defaults (UNVERIFIED for the RSX).
 - **Reference rasterization:** vertices go through the vertex program, the perspective divide
   and the viewport transform, then snap to 1/16 pixel. Coverage is decided with integer edge
@@ -353,7 +358,11 @@ FIFO → command decoder → RSX state (all registers, inspectable) → GPU back
   Blending takes all of OpenGL's factors (constant color included) and its five equations, on
   colors clamped to 0..1, computed exactly and then rounded to 8 bits; a target without alpha
   reads its alpha as 1.
-- **Textures** (`gpu/texture.h`): 2D textures in the 16- and 32-bit color formats, linear or
+- **Transfers:** libgcm uploads fragment program constants inline, through the FIFO: an image
+  from the CPU (subchannel 5) written into a 2D surface (subchannel 3). Since our HLE libgcm
+  binds no objects, a method's class follows from its subchannel, as libgcm assigns them; other
+  subchannels end the run with an error.
+- **Textures** (`gpu/texture.h`): 2D textures in the 8-, 16- and 32-bit color formats, linear or
   swizzled (Morton order), with mipmaps, the channel remap, normalized or texel coordinates,
   repeat, mirrored repeat, clamp-to-edge and border wrapping, and nearest, linear and mipmapped
   filters. Sampling follows OpenGL's rules: texel centers at half-integers, and the level of
@@ -396,7 +405,10 @@ There is **no PS3 hardware available yet**, so ground truth comes from:
    the same C for the host and running it there.
 4. **Real homebrew.** PSL1GHT programs, built with the actual PS3 toolchain, run unmodified. Their
    expected output is chosen so it doesn't depend on thread timing, or comes from the same C run
-   natively (e.g. `printf` of doubles to hundreds of digits).
+   natively (e.g. `printf` of doubles to hundreds of digits). PSL1GHT's own samples run too,
+   with shaders from NVIDIA's Cg compiler, as homebrew developers build them. The toolchain
+   image builds PSL1GHT with `-fno-strict-aliasing`: with GCC 13 its float-swapping code
+   otherwise compiles wrongly, and `rsxSetFragmentProgramParameter` sends zeros.
 5. **IBM's Cell simulator** (systemsim), if a copy can be obtained.
 6. **Black-box comparison with other emulators**: run the same test program and compare its output.
    We never read their source (see §11).
@@ -558,6 +570,13 @@ ASan/UBSan.
     non-square sizes and where a linear texture's smaller mipmap levels go; whether the border
     color is remapped; the precision of its filtering and blending (ours are exact arithmetic);
     and the registers' values before a program first writes them.
+16. RSX details Cg's programs raised: H registers share storage with R registers on the
+    hardware (ours are apart; cgcomp never uses both views of one); fp16 as IEEE half and fx12
+    as multiples of 2^-10 in [-2, 2); the condition code's first value ("equal"); what NRM does
+    to w; what the per-input "disable perspective correction" bit does (we ignore it; cgcomp
+    sets it only where scale doesn't matter); which diagonal quads split along; what B8 and
+    G8B8 read in the channels they lack (0); why the back end's label writes swap bytes 0 and 2
+    (libgcm sends them so); and how libgcm binds subchannels.
 
 ---
 

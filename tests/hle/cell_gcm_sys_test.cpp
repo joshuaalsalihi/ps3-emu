@@ -10,6 +10,7 @@
 
 #include <initializer_list>
 #include <string_view>
+#include <utility>
 
 using namespace lv2;
 using rsx::Rsx;
@@ -231,4 +232,21 @@ TEST_CASE_METHOD(GcmTest, "a video configuration is kept and reported back") {
     memory.write<u8>(k_out, 3); // no such resolution
     call("cellVideoOutConfigure", {0, k_out, 0, 0});
     CHECK(result() != k_ok);
+}
+
+TEST_CASE_METHOD(GcmTest, "the display accepts 720p, 480p and 576p") {
+    for (const auto& [id, available] : {std::pair{1, 0}, {2, 1}, {4, 1}, {5, 1}, {13, 0}}) {
+        call("cellVideoOutGetResolutionAvailability", {0, static_cast<u64>(id), 0, 0});
+        CHECK(result() == available);
+    }
+    call("cellVideoOutGetResolutionAvailability", {1, 2, 0, 0}); // not the primary output
+    CHECK(result() == 0);
+}
+
+TEST_CASE_METHOD(GcmTest, "an automatic aspect becomes the display's 16:9") {
+    memory.write<u8>(k_out, 2);     // 720p
+    memory.write<u8>(k_out + 2, 0); // VIDEO_ASPECT_AUTO
+    call("cellVideoOutConfigure", {0, k_out, 0, 0});
+    CHECK(result() == k_ok);
+    CHECK(rsx.video_mode.aspect == 2); // VIDEO_ASPECT_16_9
 }

@@ -26,6 +26,7 @@ constexpr std::string_view k_usage = R"(usage:
   ps3emu run [options] <file.elf>
       --trace               print each instruction as it executes (to stderr)
       --max-instructions N  stop after N instructions
+      --max-frames N        stop once N frames have been displayed, and exit with 0
       --instant-dma         make SPU DMA complete instantly (for debugging)
       --gpu reference|metal|null
                             render in software (the default), with Metal (macOS), or not at all
@@ -191,6 +192,9 @@ int run_program(std::string_view path, bool resume, RunOptions options, const Ou
     case RunResult::Outcome::instruction_limit:
         std::cerr << "stopped: reached the limit of " << result.instructions << " instructions\n";
         return 1;
+    case RunResult::Outcome::frame_limit:
+        std::cerr << "stopped: displayed " << options.max_frames << " frames\n";
+        return 0;
     case RunResult::Outcome::breakpoint: // only when debugging
     case RunResult::Outcome::stepped:
     case RunResult::Outcome::reached: return 1;
@@ -232,6 +236,10 @@ int run_command(const std::vector<std::string_view>& args, bool resume) {
             options.trace = &std::cerr;
         } else if (args[i] == "--instant-dma") {
             options.instant_dma = true;
+        } else if (args[i] == "--max-frames" && i + 1 < args.size()) {
+            const auto count = parse_count(args[++i]);
+            if (!count) return usage_error();
+            options.max_frames = *count;
         } else if (args[i] == "--max-instructions" && i + 1 < args.size()) {
             const auto count = parse_count(args[++i]);
             if (!count) return usage_error();

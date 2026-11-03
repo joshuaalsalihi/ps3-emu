@@ -24,6 +24,7 @@ u32 bytes_per_texel(TextureFormat format) {
     switch (format) {
     case TextureFormat::a8r8g8b8:
     case TextureFormat::d8r8g8b8: return 4;
+    case TextureFormat::b8: return 1;
     default: return 2;
     }
 }
@@ -45,6 +46,8 @@ std::array<Float, 4> decode(TextureFormat format, u32 bits) {
     case TextureFormat::d1r5g5b5: return {k_one, field(10, 5), field(5, 5), field(0, 5)};
     case TextureFormat::a4r4g4b4: return {field(12, 4), field(8, 4), field(4, 4), field(0, 4)};
     case TextureFormat::r5g6b5: return {k_one, field(11, 5), field(5, 6), field(0, 5)};
+    case TextureFormat::b8: return {k_zero, k_zero, k_zero, field(0, 8)};
+    case TextureFormat::g8b8: return {k_zero, k_zero, field(8, 8), field(0, 8)};
     }
     return {};
 }
@@ -159,7 +162,9 @@ Vec4 read_texel(const Memory& memory, const Texture& texture, u32 level, u32 x, 
     const u32 offset =
         texture.linear ? y * texture.pitch + x * bytes : swizzled_offset(x, y, size) * bytes;
     const u32 address = level_address(texture, level) + offset;
-    const u32 bits = bytes == 4 ? memory.read<u32>(address) : memory.read<u16>(address);
+    const u32 bits = bytes == 4   ? memory.read<u32>(address)
+                     : bytes == 2 ? memory.read<u16>(address)
+                                  : memory.read<u8>(address);
     return remap(texture.remap, decode(texture.format, bits));
 }
 

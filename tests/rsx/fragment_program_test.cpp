@@ -70,8 +70,8 @@ TEST_CASE_METHOD(FragmentTest, "cgcomp's MOV of the color decodes as such") {
     }
     const auto program = decode_program(memory, k_program);
     REQUIRE(program);
-    REQUIRE(program->size() == 1);
-    const Instruction& mov = (*program)[0];
+    REQUIRE(program->instructions.size() == 1);
+    const Instruction& mov = program->instructions[0];
     CHECK(mov.opcode == 1);
     CHECK(mov.end);
     CHECK(mov.destination == 0);
@@ -79,7 +79,8 @@ TEST_CASE_METHOD(FragmentTest, "cgcomp's MOV of the color decodes as such") {
     CHECK(mov.input == k_input_color0);
     CHECK(mov.sources[0].type == SourceType::input);
     CHECK(mov.sources[0].swizzle == std::array<u8, 4>{0, 1, 2, 3});
-    CHECK_FALSE(mov.conditional);
+    CHECK(mov.condition == k_condition_always);
+    CHECK(mov.precision == Precision::fp32);
 
     std::array<Vec4, k_input_count> inputs{};
     inputs[k_input_color0] = v(0.25f, 0.5f, 0.75f, 1);
@@ -108,12 +109,18 @@ TEST_CASE_METHOD(FragmentTest, "MAD, masks, negation and saturation") {
     CHECK(run_program(inputs).color == v(1, 0, 0, 0)); // 4 - 2 = 2 -> 1; 0.25 - 0.5 -> 0
 }
 
-TEST_CASE_METHOD(FragmentTest, "fp16 registers are reported as unsupported") {
-    store({operation(0x01, 0, 0xf, k_input_color0, true) | 1u << 7,
-           source(SourceType::input) | k_always, 0, 0});
-    const Result result = run_program({});
-    REQUIRE(result.error);
-    CHECK(*result.error == "fp16 fragment program registers are not supported yet");
+TEST_CASE_METHOD(FragmentTest, "H registers and fp16 precision round to half precision") {
+    // H1 = COL0, rounded as it's written; then R0 = H1 + COL0, computed at fp16 precision.
+    store({operation(0x01, 1, 0xf, k_input_color0) | 1u << 7, source(SourceType::input) | k_always,
+           0, 0});
+    store({operation(0x03, 0, 0xf, k_input_color0, true) | 1u << 22,
+           (source(SourceType::temp, 1) | 1u << 8) | k_always, source(SourceType::input), 0});
+    std::array<Vec4, k_input_count> inputs{};
+    inputs[k_input_color0] = v(1 + 0x1p-11f, 0.1f, 60000, 1000.3f);
+    // Expected values from NumPy's float16. H1 = {1 (a tie, to even), 0.0999755859375, 60000,
+    // 1000.5}; the sums {2.00048828125, 0.19997558, 120000, 2000.8} round to these, 120000
+    // overflowing to infinity.
+    CHECK(run_program(inputs).color == Vec4{0x4000'0000, 0x3e4c'c000, 0x7f80'0000, 0x44fa'2000});
 }
 
 namespace {
@@ -140,8 +147,8 @@ TEST_CASE_METHOD(FragmentTest, "cgcomp's TEX and TXP sample their unit at the te
     }
     auto program = decode_program(memory, k_program);
     REQUIRE(program);
-    CHECK(is_texture_lookup((*program)[0]));
-    CHECK((*program)[0].input == k_input_texcoord0);
+    CHECK(is_texture_lookup(program->instructions[0]));
+    CHECK(program->instructions[0].input == k_input_texcoord0);
 
     Inputs inputs{};
     inputs[k_input_texcoord0] = v(0.25f, 0.5f, 0, 2);
@@ -189,4 +196,78 @@ TEST_CASE_METHOD(FragmentTest, "DDX and DDY difference neighboring lanes") {
     for (u32 lane = 0; lane < k_quad_size; ++lane) {
         CHECK(result.colors[lane] == v(1, 1, 10, 10));
     }
+}
+
+namespace {
+
+constexpr u32 k_set_condition = 1u << 8;
+constexpr u32 k_condition_identity = 0xe4u << 21; // component i tests condition component i
+
+u32 when(u32 condition) {
+    return condition << 18 | k_condition_identity;
+}
+
+} // namespace
+
+TEST_CASE_METHOD(FragmentTest, "the condition code decides which components are written") {
+    // R1 = COL0, setting the condition code; then R0 = {5, 5, 5, 5} where it's greater than 0,
+    // and R2 = {7, ...} where it isn't equal to 0 (including NaN, which is unordered).
+    store({operation(0x01, 1, 0xf, k_input_color0) | k_set_condition,
+           source(SourceType::input) | k_always, 0, 0});
+    store(
+        {operation(0x01, 0, 0xf), source(SourceType::constant) | when(k_condition_greater), 0, 0});
+    store({f(5), f(5), f(5), f(5)});
+    store({operation(0x01, 2, 0xf), source(SourceType::constant) | when(5), 0, 0});
+    store({f(7), f(7), f(7), f(7)});
+    // R0 += R2 * 100, so one result shows both.
+    store({operation(0x04, 0, 0xf, 0, true), source(SourceType::temp, 2) | k_always,
+           source(SourceType::constant), source(SourceType::temp, 0)});
+    store({f(100), f(100), f(100), f(100)});
+    std::array<Vec4, k_input_count> inputs{};
+    inputs[k_input_color0] = {f(-1), f(0), f(2), 0x7fc0'0000};
+    CHECK(run_program(inputs).color == v(700, 0, 705, 700));
+}
+
+TEST_CASE_METHOD(FragmentTest, "KIL discards a fragment where its condition passes") {
+    // Set the condition code from COL0, then kill if any component is less than 0.
+    store({operation(0x01, 1, 0xf, k_input_color0) | k_set_condition | 1u << 30,
+           source(SourceType::input) | k_always, 0, 0});
+    store({operation(0x12, 0, 0, 0, true) | 1u << 30, when(k_condition_less), 0, 0});
+    std::array<Vec4, k_input_count> inputs{};
+    inputs[k_input_color0] = v(1, 2, 3, 4);
+    CHECK_FALSE(run_program(inputs).killed);
+    inputs[k_input_color0] = v(1, 2, -3, 4);
+    CHECK(run_program(inputs).killed);
+}
+
+TEST_CASE_METHOD(FragmentTest, "fx12 precision saturates to 2 and keeps 10 fraction bits") {
+    store({operation(0x01, 0, 0xf, k_input_color0, true) | 2u << 22,
+           source(SourceType::input) | k_always, 0, 0});
+    std::array<Vec4, k_input_count> inputs{};
+    inputs[k_input_color0] = v(3, -3, 0.1f, 1.9999f);
+    // 0.1 is 102.4 steps of 2^-10, so 102; 1.9999 rounds up to 2, past the largest, 2047 steps.
+    CHECK(run_program(inputs).color == v(2047 / 1024.0f, -2, 102 / 1024.0f, 2047 / 1024.0f));
+}
+
+TEST_CASE_METHOD(FragmentTest, "EX2, LG2 and NRM") {
+    // R0 = {EX2(COL0.x), LG2(COL0.y), ...}; then R0.zw = NRM(TEX0).xz.
+    store({operation(0x1c, 0, 0b0001, k_input_color0), source(SourceType::input) | k_always, 0, 0});
+    store({operation(0x1d, 0, 0b0010, k_input_color0),
+           (source(SourceType::input) & ~(3u << 9)) | 1u << 9 | k_always, 0, 0}); // .y
+    store({operation(0x39, 1, 0b0111, k_input_texcoord0), source(SourceType::input) | k_always, 0,
+           0});
+    // R0.zw = R1.xz
+    store({operation(0x01, 0, 0b1100, 0, true),
+           (source(SourceType::temp, 1) & ~(0xffu << 9)) | (0u | 0u << 2 | 0u << 4 | 2u << 6) << 9 |
+               k_always,
+           0, 0});
+    std::array<Vec4, k_input_count> inputs{};
+    inputs[k_input_color0] = v(3, 8, 0, 0);
+    inputs[k_input_texcoord0] = v(3, 0, 4, 9);
+    CHECK(run_program(inputs).color == v(8, 3, 0.6f, 0.8f));
+
+    inputs[k_input_color0] = v(0.5f, 0, 0, 0);
+    const Vec4 color = run_program(inputs).color;
+    CHECK(color[0] == 0x3fb5'04f3); // sqrt(2), correctly rounded
+    CHECK(color[1] == 0xff80'0000); // log2(0) = -infinity
 }

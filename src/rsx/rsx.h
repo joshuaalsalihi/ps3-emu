@@ -117,6 +117,7 @@ public:
     u32 reg(u32 method, u32 subchannel = 0) const { return registers_[subchannel][method / 4]; }
     u32 get() const;
     u32 put() const;
+    u64 frames() const { return frames_; } // displayed so far
 
     // Saves or loads the RSX's state. The backend and callbacks aren't state.
     void serialize(state::Archive& archive) {
@@ -124,13 +125,14 @@ public:
                 flip_status_, queued_flip_, flip_queued_at_, return_offset_, waiting_,
                 semaphore_address_, semaphore_value_, frames_, registers_, transform_program_,
                 transform_program_position_, transform_constants_, transform_constant_position_,
-                primitive_, draw_vertices_, error_);
+                primitive_, draw_vertices_, image_position_, error_);
     }
 
 private:
     void run_commands();
     void execute(u32 subchannel, u32 method, u32 value);
     void execute_3d(u32 method, u32 value);
+    void image_from_cpu(u32 method, u32 value);
     void clear_surface(u32 mask);
     std::optional<ColorSurface> color_surface();
     Rect drawing_area() const;
@@ -180,6 +182,7 @@ private:
     u32 transform_constant_position_ = 0; // in components
     std::optional<u32> primitive_;
     std::vector<u32> draw_vertices_;
+    u32 image_position_ = 0; // the next pixel of an image from the CPU
     std::optional<std::string> error_;
 };
 

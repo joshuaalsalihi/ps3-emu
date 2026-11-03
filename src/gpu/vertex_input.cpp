@@ -66,6 +66,27 @@ std::vector<std::array<std::size_t, 3>> assemble(rsx::Primitive primitive, std::
             triangles.push_back({0, i - 1, i});
         }
         break;
+    // Quads and polygons become triangles in the same winding, each ending with the vertex
+    // OpenGL takes flat-shaded values from: a quad's last, a quad strip quad's fourth, a
+    // polygon's first. UNVERIFIED: the diagonal the RSX splits quads along.
+    case rsx::Primitive::quads:
+        for (std::size_t i = 0; i + 3 < count; i += 4) {
+            triangles.push_back({i, i + 1, i + 3});
+            triangles.push_back({i + 1, i + 2, i + 3});
+        }
+        break;
+    case rsx::Primitive::quad_strip:
+        // Quad i has corners 2i, 2i + 1, 2i + 3, 2i + 2, in that order around it.
+        for (std::size_t i = 0; 2 * i + 3 < count; ++i) {
+            triangles.push_back({2 * i, 2 * i + 1, 2 * i + 3});
+            triangles.push_back({2 * i + 2, 2 * i, 2 * i + 3});
+        }
+        break;
+    case rsx::Primitive::polygon:
+        for (std::size_t i = 2; i < count; ++i) {
+            triangles.push_back({i - 1, i, 0});
+        }
+        break;
     }
     return triangles;
 }

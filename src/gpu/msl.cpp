@@ -148,7 +148,9 @@ std::string fragment_source(const rsx::fragment::Instruction& in,
     using rsx::fragment::SourceType;
     std::string value;
     switch (source.type) {
-    case SourceType::temp: value = std::format("r[{}]", source.temp); break;
+    case SourceType::temp:
+        value = std::format("{}[{}]", source.half ? "h" : "r", source.temp);
+        break;
     case SourceType::input: value = std::format("f[{}]", in.input); break;
     case SourceType::constant:
         value = std::format("float4({}, {}, {}, {})", float_bits(in.constant[0]),
@@ -197,9 +199,12 @@ std::optional<std::string> fragment_expression(u32 opcode) {
     case 0x16: return "dfdy(a)";
     case 0x1a: return "float4(1.0 / a.x)";
     case 0x1b: return "float4(rsqrt(abs(a.x)))";
+    case 0x1c: return "float4(exp2(a.x))";
+    case 0x1d: return "float4(log2(a.x))";
     case 0x20: return "float4(1.0)";
     case 0x21: return "float4(0.0)";
     case 0x38: return "float4(dot(a.xy, b.xy))";
+    case 0x39: return "a * rsqrt(dot(a.xyz, a.xyz))";
     case 0x3a: return "a / b.x";
     default: return std::nullopt;
     }
@@ -207,29 +212,64 @@ std::optional<std::string> fragment_expression(u32 opcode) {
 
 using Textures = std::array<std::optional<rsx::Texture>, rsx::k_texture_units>;
 
+// The condition test, per component, on the condition code: the values that last set it,
+// compared with 0 (NaN fails every test but "not equal", as in rsx::fragment).
+std::string condition_test(const rsx::fragment::Instruction& in) {
+    static constexpr const char* k_tests[] = {"false", "<", "==", "<=", ">", "!=", ">=", "true"};
+    if (in.condition == 0 || in.condition == 7)
+        return std::format("bool4({})", k_tests[in.condition]);
+    return std::format("(cc{} {} 0.0)", swizzle(in.condition_swizzle), k_tests[in.condition]);
+}
+
+std::string with_precision(rsx::fragment::Precision precision, const std::string& value) {
+    switch (precision) {
+    case rsx::fragment::Precision::fp32: return value;
+    case rsx::fragment::Precision::fp16: return "float4(half4(" + value + "))";
+    case rsx::fragment::Precision::fx12:
+        return "clamp(rint(" + value + " * 1024.0), -2048.0, 2047.0) / 1024.0";
+    }
+    return value;
+}
+
 std::optional<std::string> translate_fragment(const rsx::fragment::Program& program,
                                               const Textures& textures, std::string& body) {
-    for (const rsx::fragment::Instruction& in : program) {
+    for (const rsx::fragment::Instruction& in : program.instructions) {
         if (in.opcode == 0) continue;
-        const bool half =
-            in.destination_half || std::any_of(in.sources.begin(), in.sources.end(),
-                                               [](const auto& source) { return source.half; });
-        if (half) return "fp16 fragment program registers";
-        if (in.conditional || in.is_branch) return "fragment program flow control";
+        if (in.is_branch) return "fragment program flow control";
         if (in.scale != 0) return "fragment program output scaling";
+        body += "    {\n";
+        body += std::format("    bool4 pass = {};\n", condition_test(in));
+        if (in.opcode == 0x12) { // KIL
+            body += "    if (any(pass)) discard_fragment();\n    }\n";
+            continue;
+        }
         const auto& texture = textures[in.texture_unit];
         if (rsx::fragment::is_texture_lookup(in) && !texture) return "a missing texture";
         const auto expression = rsx::fragment::is_texture_lookup(in)
                                     ? lookup_expression(in, *texture)
                                     : fragment_expression(in.opcode);
         if (!expression) return std::format("fragment opcode {:#x}", in.opcode);
-        body += "    {\n";
         body += std::format("    float4 a = {};\n    float4 b = {};\n    float4 c = {};\n",
                             fragment_source(in, in.sources[0]), fragment_source(in, in.sources[1]),
                             fragment_source(in, in.sources[2]));
-        if (!in.no_destination) {
-            body += masked_write(std::format("r[{}]", in.destination), *expression, in.mask,
-                                 in.saturate);
+        std::string value = with_precision(in.precision, "float4(" + *expression + ")");
+        if (in.saturate) value = "clamp(" + value + ", 0.0, 1.0)";
+        body += std::format("    float4 value = {};\n", value);
+        const std::string destination =
+            std::format("{}[{}]", in.destination_half ? "h" : "r", in.destination);
+        for (int i = 0; i < 4; ++i) {
+            if ((in.mask & (1u << i)) == 0) continue;
+            const char component = k_components[i];
+            std::string writes;
+            if (in.set_condition) writes += std::format(" cc.{0} = value.{0};", component);
+            if (!in.no_destination) {
+                writes +=
+                    in.destination_half
+                        ? std::format(" {0}.{1} = float(half(value.{1}));", destination, component)
+                        : std::format(" {0}.{1} = value.{1};", destination, component);
+            }
+            if (!writes.empty())
+                body += std::format("    if (pass.{}) {{{} }}\n", component, writes);
         }
         body += "    }\n";
     }
@@ -237,7 +277,7 @@ std::optional<std::string> translate_fragment(const rsx::fragment::Program& prog
 }
 
 // Discards the fragment unless its alpha, as an 8-bit value, passes the alpha test.
-std::string alpha_test(const std::optional<rsx::AlphaTest>& test) {
+std::string alpha_test(const std::optional<rsx::AlphaTest>& test, bool half_output) {
     if (!test) return "";
     const char* comparison = "";
     switch (test->compare) {
@@ -250,9 +290,9 @@ std::string alpha_test(const std::optional<rsx::AlphaTest>& test) {
     case rsx::Compare::greater_equal: comparison = ">="; break;
     case rsx::Compare::always: return "";
     }
-    return std::format("    uint alpha = uint(rint(saturate(r[0].w) * 255.0));\n"
+    return std::format("    uint alpha = uint(rint(saturate({}[0].w) * 255.0));\n"
                        "    if (!(alpha {} {}u)) discard_fragment();\n",
-                       comparison, test->reference);
+                       half_output ? "h" : "r", comparison, test->reference);
 }
 
 } // namespace
@@ -334,13 +374,16 @@ vertex Varyings vertex_main(uint id [[vertex_id]], device const float4* inputs [
 fragment float4 fragment_main(Varyings in [[stage_in]]{}) {{
     float4 f[{}] = {{}};
 {}    float4 r[{}] = {{}};
-{}{}    return r[0];
+    float4 h[{}] = {{}};
+    float4 cc = float4(0.0);
+{}{}    return {};
 }}
 )",
         varyings, vertex::k_input_count, vertex::k_input_count, vertex::k_input_count,
         vertex::k_temp_count, vertex::k_output_count, vertex_body, copy_outputs, texture_parameters,
-        fragment::k_input_count, fragment_inputs, fragment::k_temp_count, fragment_body,
-        alpha_test(request.alpha_test));
+        fragment::k_input_count, fragment_inputs, fragment::k_temp_count, fragment::k_temp_count,
+        fragment_body, alpha_test(request.alpha_test, fragment_program.half_output),
+        fragment_program.half_output ? "h[0]" : "r[0]");
     return translation;
 }
 

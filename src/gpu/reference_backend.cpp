@@ -317,6 +317,7 @@ std::optional<std::string> ReferenceBackend::draw(const rsx::DrawRequest& reques
                 error = result.error;
                 return;
             }
+            visible &= ~result.killed;
             for (u32 lane = 0; lane < 4; ++lane) {
                 if ((visible & (1u << lane)) == 0) continue;
                 if (request.alpha_test &&

@@ -5,11 +5,11 @@ Seeing if giving Anthropic $20/month is enough to fulfill a childhood dream.
 An accuracy-focused PlayStation 3 emulator, built for research, homebrew development and learning
 how the Cell processor works.
 
-**Status:** milestone M6 is done. Real PS3 homebrew built with the PSL1GHT SDK runs unmodified:
-multiple threads, locks, condition variables, semaphores, sleeps, `printf` (floats included),
-`malloc`, SPU threads that talk to the PPU through mailboxes, DMA, atomics and event queues
-(`spu_printf` included), and graphics: the RSX clears the screen, draws shaded triangles and
-flips to the display.
+**Status:** milestone M6 is done and M7 under way. Real PS3 homebrew built with the PSL1GHT SDK
+runs unmodified: multiple threads, locks, condition variables, semaphores, sleeps, `printf`
+(floats included), `malloc`, SPU threads that talk to the PPU through mailboxes, DMA, atomics and
+event queues (`spu_printf` included), and 3D graphics, including PSL1GHT's own `rsxtest` sample:
+textured objects with per-pixel lighting from shaders compiled by NVIDIA's Cg compiler.
 
 - **CPU:** the PS3's main core (the PPU) runs its full user instruction set: integer, branch,
   load/store, atomics, floating point (with every FPSCR flag) and the VMX vector unit, including
@@ -57,7 +57,10 @@ The [example programs](examples/) need extra tools, and are skipped if they're m
 - **LLVM** for the small assembly and C examples: `brew install llvm lld` on macOS, or
   `apt install clang lld` on Linux.
 - **Docker** for the PSL1GHT examples: `tools/build-psl1ght-image.sh` builds the PS3 homebrew
-  toolchain from source into an image (this takes a while), then re-run CMake.
+  toolchain from source into an image (this takes a while), then re-run CMake. It also builds
+  a small image with PSL1GHT's shader compiler and NVIDIA's Cg compiler library, which it
+  downloads from NVIDIA (it isn't part of this repository). That library exists only for
+  x86-64, so on other hosts Docker runs that image emulated.
 
 ## Usage
 
@@ -118,6 +121,7 @@ traces differ at line 2755, after 2714 instructions, in SPU thread 0x1005 "worke
 | `ps3emu run <file.elf>` | Runs a program; exits with the program's exit status. |
 | `--trace` | Prints every instruction, syscall, library call and thread switch (to stderr). |
 | `--max-instructions N` | Stops after N instructions. |
+| `--max-frames N` | Stops once N frames have been displayed, and exits with 0 (for demos that never exit). |
 | `--instant-dma` | Makes SPU DMA complete instantly, to tell timing bugs from logic bugs. |
 | `--frames FILE` | Writes the size and SHA-1 of each frame the program displays to FILE. |
 | `--dump-frames DIR` | Saves each displayed frame as a PNG in DIR. |

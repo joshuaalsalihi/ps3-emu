@@ -19,6 +19,9 @@
 
 struct RunOptions {
     u64 max_instructions = std::numeric_limits<u64>::max();
+    // Stop once this many frames have been displayed, counting from the program's start: for
+    // programs that never exit, such as most graphics demos.
+    u64 max_frames = std::numeric_limits<u64>::max();
     std::ostream* trace = nullptr; // if set, every instruction and call is printed here
     bool instant_dma = false;      // SPU DMA completes the moment it is issued (for debugging)
 
@@ -47,6 +50,7 @@ struct RunResult {
         faulted,
         deadlocked,
         instruction_limit,
+        frame_limit,
         breakpoint,
         stepped,
         reached, // the stop_at position

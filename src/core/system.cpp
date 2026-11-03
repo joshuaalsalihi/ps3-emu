@@ -102,6 +102,10 @@ RunResult System::run(const RunOptions& options) {
             result.outcome = RunResult::Outcome::instruction_limit;
             return result;
         }
+        if (rsx_.frames() >= options.max_frames) {
+            result.outcome = RunResult::Outcome::frame_limit;
+            return result;
+        }
 
         if (!turn_) {
             const bool ready = begin_turn();

@@ -265,3 +265,19 @@ TEST_CASE_METHOD(DrawTest, "the alpha test drops fragments before they write col
     CHECK(count(0x80ff'0000) == 64);
     CHECK(memory.read<u32>(Rsx::k_local_base + k_depth + 128 * 7 + 4 * 15) == 0x8000'0000);
 }
+
+TEST_CASE_METHOD(DrawTest, "quads, quad strips and polygons cover their area") {
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}, k_red);
+    draw(method::k_quads, 4);
+    REQUIRE_FALSE(rsx.error());
+    CHECK(count(k_red_pixel) == 16 * 8);
+
+    // Two quads side by side, as a strip: corners alternate bottom and top.
+    set_vertices({{-1, -1}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 1}}, {0, 0, 1, 1});
+    draw(method::k_quad_strip, 6);
+    CHECK(count(0xff00'00ff) == 16 * 8);
+
+    set_vertices({{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}, {0, 1, 0, 1});
+    draw(method::k_polygon, 4);
+    CHECK(count(0xff00'ff00) == 16 * 8);
+}

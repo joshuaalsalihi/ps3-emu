@@ -124,11 +124,19 @@ TEST_CASE_METHOD(RsxTest, "a semaphore acquire waits until the label has the val
     CHECK(rsx.reg(0x1000) == 1);
 }
 
-TEST_CASE_METHOD(RsxTest, "the 3D class's back end release writes a label") {
+TEST_CASE_METHOD(RsxTest, "the 3D class's releases write labels") {
+    // The back end's value has bytes 0 and 2 swapped, as libgcm sends it: 1 arrives as 0x10000.
     methods(method::k_semaphore_offset_3d, {0x20});
-    methods(method::k_back_end_write_semaphore_release, {77});
+    methods(method::k_back_end_write_semaphore_release, {0x0001'0000});
     rsx.run();
-    CHECK(memory.read<u32>(Rsx::k_labels + 0x20) == 77);
+    CHECK(memory.read<u32>(Rsx::k_labels + 0x20) == 1);
+    methods(method::k_back_end_write_semaphore_release, {0x1122'3344});
+    rsx.run();
+    CHECK(memory.read<u32>(Rsx::k_labels + 0x20) == 0x1144'3322);
+
+    methods(method::k_texture_read_semaphore_release, {0x1122'3344});
+    rsx.run();
+    CHECK(memory.read<u32>(Rsx::k_labels + 0x20) == 0x1122'3344);
 }
 
 // ---- Addresses ----
@@ -304,4 +312,33 @@ TEST_CASE_METHOD(RsxTest, "frames are counted without a callback, and shown only
     load(start);
     rsx.run();
     CHECK(frames.size() == 1);
+}
+
+// ---- Transfers ----
+
+TEST_CASE_METHOD(RsxTest, "an image from the CPU writes its pixels into the 2D surface") {
+    // As libgcm's rsxInlineTransfer sends them: a Y32 surface at local offset 0x100 with a
+    // 0x40-byte pitch, then a 3x1 image at (2, 1), whose fourth word is padding.
+    methods(method::k_surfaces_2d_destination_context, {method::k_context_local},
+            method::k_subchannel_surfaces_2d);
+    methods(method::k_surfaces_2d_format, {method::k_surface_2d_y32, 0x40u << 16 | 0x40, 0, 0x100},
+            method::k_subchannel_surfaces_2d);
+    methods(method::k_image_point, {2 | 1u << 16, 3 | 1u << 16, 3 | 1u << 16},
+            method::k_subchannel_image_from_cpu);
+    methods(method::k_image_color, {0x11, 0x22, 0x33, 0x44}, method::k_subchannel_image_from_cpu);
+    rsx.run();
+    REQUIRE_FALSE(rsx.error());
+    const u32 row = Rsx::k_local_base + 0x100 + 0x40;
+    CHECK(memory.read<u32>(row + 4) == 0);
+    CHECK(memory.read<u32>(row + 8) == 0x11);
+    CHECK(memory.read<u32>(row + 12) == 0x22);
+    CHECK(memory.read<u32>(row + 16) == 0x33);
+    CHECK(memory.read<u32>(row + 20) == 0); // the padding word goes nowhere
+}
+
+TEST_CASE_METHOD(RsxTest, "methods on subchannels we don't model are reported") {
+    methods(0x0300, {1}, 2);
+    rsx.run();
+    REQUIRE(rsx.error());
+    CHECK(*rsx.error() == "RSX: methods on subchannel 2 are not supported yet");
 }

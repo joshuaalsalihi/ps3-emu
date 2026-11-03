@@ -111,6 +111,36 @@ Float log2(Float a) {
     });
 }
 
+Float exp2(Float a) {
+    if (is_nan(a)) return k_default_nan;
+    if (less(from_integer(127), a)) return 0x7f80'0000; // 2^128 and up overflow
+    if (less(a, from_integer(-151))) return k_zero;     // below half the smallest denormal
+    const Float whole = floor(a);
+    const u64 fraction = soft_float::exp2_fraction(wide(add(a, whole ^ k_sign))); // exact
+    const s64 exponent = to_integer(whole);
+    const u64 scale = static_cast<u64>(exponent + 1023) << 52; // 2^whole, exactly
+    return single([&](auto format, auto environment, auto& flags) {
+        return soft_float::multiply(fraction, scale, format, environment, flags);
+    });
+}
+
+Float round_to_half(Float a) {
+    if (is_nan(a)) return k_default_nan;
+    constexpr soft_float::Format k_half = {11, -14, 15, 24};
+    soft_float::Flags flags;
+    return double_to_single_bits(soft_float::round_to_format(wide(a), k_half, {}, flags));
+}
+
+Float round_to_fixed12(Float a) {
+    if (is_nan(a)) return k_zero; // UNVERIFIED
+    constexpr s64 k_steps = 1024; // 2^10 per unit
+    const s64 steps = to_integer(multiply(a, from_integer(k_steps)));
+    const s64 clamped = steps < -2 * k_steps      ? -2 * k_steps
+                        : steps > 2 * k_steps - 1 ? 2 * k_steps - 1
+                                                  : steps;
+    return divide(from_integer(clamped), from_integer(k_steps));
+}
+
 Float from_integer(s64 value) {
     return single([&](auto format, auto environment, auto& flags) {
         return soft_float::from_integer(value, format, environment, flags);

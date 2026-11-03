@@ -27,6 +27,15 @@ The `psl1ght/` directory holds real PS3 homebrew, written against the
 | `psl1ght/rsx_scene.c` | A floor running to the horizon with a swizzled, mipmapped texture (trilinear filtering), a ring cut out by the alpha test from a 16-bit texture in main memory, and blended panes of glass, in a viewport smaller than the screen. |
 | `psl1ght/spu_events.c` | Event queues and ports in both directions between the PPU and an SPU thread (`spu_events_spu.c`), and `spu_printf`. |
 
+PSL1GHT's own samples are built too, unmodified, from the PSL1GHT sources in the
+`ps3emu-cgcomp` image: their Cg shaders are compiled there (`extract-samples.sh`), and the rest
+by their own makefiles in the toolchain image (`cgcomp-prebuilt` hands them the shaders).
+Samples that never exit are checked over their first frames:
+
+| Sample | Shows |
+|---|---|
+| `graphics/rsxtest` | A textured sphere and torus with per-pixel diffuse and specular lighting, and text from a debug font; its first 2 frames. Cg's fragment programs use half-precision registers and condition codes. |
+
 Output never depends on how the threads interleave: either only the main thread prints, after its
 workers finish, or each print waits for the one before it (as in `spu_events.c`, where every
 `spu_printf` returns before the SPU sends its result). A program with a `<name>_spu.c` gets it compiled for the SPU and embedded

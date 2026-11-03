@@ -75,6 +75,8 @@ TEST_CASE_METHOD(TextureTest, "texel formats decode to fractions of their maximu
         unit0().format = format;
         if (format == TextureFormat::a8r8g8b8 || format == TextureFormat::d8r8g8b8) {
             memory.write<u32>(k_base, bits);
+        } else if (format == TextureFormat::b8) {
+            memory.write<u8>(k_base, static_cast<u8>(bits));
         } else {
             memory.write<u16>(k_base, static_cast<u16>(bits));
         }
@@ -90,6 +92,8 @@ TEST_CASE_METHOD(TextureTest, "texel formats decode to fractions of their maximu
     CHECK(texel(TextureFormat::a1r5g5b5, 0x8000 | 31 << 5) == A{0, 1, 0, 1});
     CHECK(texel(TextureFormat::d1r5g5b5, 31 << 10) == A{1, 0, 0, 1});
     CHECK(texel(TextureFormat::a4r4g4b4, 0x5f03) == A{1, 0, 0.2f, 1 / 3.0f});
+    CHECK(texel(TextureFormat::b8, 0x33) == A{0, 0, 0.2f, 0});
+    CHECK(texel(TextureFormat::g8b8, 0xff33) == A{0, 1, 0.2f, 0});
 }
 
 TEST_CASE_METHOD(TextureTest, "the remap chooses each channel's source, or 0 or 1") {

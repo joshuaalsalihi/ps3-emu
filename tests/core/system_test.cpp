@@ -425,7 +425,7 @@ TEST_CASE("a state that can't be loaded is rejected") {
         saved[8] = 99;
         System fresh(tty);
         CHECK_THROWS_WITH(fresh.load_state(saved),
-                          "save state is version 99, but this build reads version 1");
+                          "save state is version 99, but this build reads version 2");
     }
     SECTION("truncated") {
         saved.resize(saved.size() / 2);

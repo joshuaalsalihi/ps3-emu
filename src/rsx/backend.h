@@ -66,7 +66,7 @@ struct VertexInput {
     u32 stride = 0;  // bytes from one vertex to the next
 };
 
-enum class Primitive { triangles, triangle_strip, triangle_fan };
+enum class Primitive { triangles, triangle_strip, triangle_fan, quads, quad_strip, polygon };
 
 // Comparison functions for the depth test (method::k_never ... k_always).
 enum class Compare : u32 {
@@ -135,12 +135,15 @@ struct Blend {
 };
 
 // Texture formats we decode: the low 5 bits of the format byte. PSL1GHT, rsx/gcm_sys.h:
-// GCM_TEXTURE_FORMAT_*. The D formats have no alpha channel: alpha reads as 1.
+// GCM_TEXTURE_FORMAT_*. The D formats have no alpha channel: alpha reads as 1. B8 and G8B8 have
+// only the channels they name; UNVERIFIED: the others read as 0 (programs remap them anyway).
 enum class TextureFormat : u32 {
+    b8 = 1,
     a1r5g5b5 = 2,
     a4r4g4b4 = 3,
     r5g6b5 = 4,
     a8r8g8b8 = 5,
+    g8b8 = 11,
     d1r5g5b5 = 29,
     d8r8g8b8 = 30,
 };

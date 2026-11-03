@@ -38,7 +38,7 @@ TEST_CASE("a pass-through program translates to MSL") {
 
     rsx::DrawRequest request;
     request.vertex_program.instructions = {move_to_output(0, 0), move_to_output(3, 1)};
-    request.fragment_program = {move};
+    request.fragment_program.instructions = {move};
     const gpu::MslTranslation msl = gpu::translate_to_msl(request);
     REQUIRE_FALSE(msl.error);
     CHECK(contains(msl.source, "vertex Varyings vertex_main("));
@@ -46,7 +46,9 @@ TEST_CASE("a pass-through program translates to MSL") {
     CHECK(contains(msl.source, "float4 a = v[3].xyzw;"));
     CHECK(contains(msl.source, "o[1].xyzw = (vector).xyzw;"));
     CHECK(contains(msl.source, "f[1] = in.o1;"));
-    CHECK(contains(msl.source, "r[0].xyzw = (a).xyzw;"));
+    CHECK(contains(msl.source, "float4 value = float4(a);"));
+    CHECK(contains(msl.source, "if (pass.x) { r[0].x = value.x; }"));
+    CHECK(contains(msl.source, "return r[0];"));
     CHECK(contains(msl.source, "float4 o16 [[user(o16)]];"));
 }
 
@@ -93,7 +95,7 @@ TEST_CASE("texture lookups and the alpha test appear in the MSL") {
     lookup.end = true;
 
     rsx::DrawRequest request;
-    request.fragment_program = {lookup};
+    request.fragment_program.instructions = {lookup};
     CHECK(gpu::translate_to_msl(request).error ==
           "a missing texture can't be translated to Metal yet");
 
@@ -105,4 +107,32 @@ TEST_CASE("texture lookups and the alpha test appear in the MSL") {
     CHECK(contains(msl.source, "texture2d<float> t2 [[texture(2)]], sampler s2 [[sampler(2)]]"));
     CHECK(contains(msl.source, "t2.sample(s2, a.xy / a.w, bias(-0x80p-8))"));
     CHECK(contains(msl.source, "if (!(alpha >= 64u)) discard_fragment();"));
+}
+
+TEST_CASE("half registers, precision, the condition code and KIL appear in the MSL") {
+    fragment::Instruction move; // MOVHC H2.x, COL0 at fp16 precision, where the code is > 0
+    move.opcode = 0x01;
+    move.input = fragment::k_input_color0;
+    move.sources[0].type = fragment::SourceType::input;
+    move.mask = 0b0001;
+    move.destination = 2;
+    move.destination_half = true;
+    move.precision = fragment::Precision::fp16;
+    move.set_condition = true;
+    move.condition = fragment::k_condition_greater;
+    fragment::Instruction kill; // KIL LT
+    kill.opcode = 0x12;
+    kill.condition = fragment::k_condition_less;
+    kill.end = true;
+
+    rsx::DrawRequest request;
+    request.fragment_program.instructions = {move, kill};
+    request.fragment_program.half_output = true;
+    const gpu::MslTranslation msl = gpu::translate_to_msl(request);
+    REQUIRE_FALSE(msl.error);
+    CHECK(contains(msl.source, "bool4 pass = (cc.xyzw > 0.0);"));
+    CHECK(contains(msl.source, "float4 value = float4(half4(float4(a)));"));
+    CHECK(contains(msl.source, "if (pass.x) { cc.x = value.x; h[2].x = float(half(value.x)); }"));
+    CHECK(contains(msl.source, "if (any(pass)) discard_fragment();"));
+    CHECK(contains(msl.source, "return h[0];"));
 }

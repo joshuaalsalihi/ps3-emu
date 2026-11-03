@@ -219,12 +219,51 @@ void Rsx::execute(u32 subchannel, u32 method, u32 value) {
     }
     if (method < 0x100) return;
 
-    if (subchannel == method::k_hle_subchannel) {
+    switch (subchannel) {
+    case method::k_subchannel_3d: return execute_3d(method, value);
+    case method::k_subchannel_surfaces_2d: return; // only state, which transfers read
+    case method::k_subchannel_image_from_cpu: return image_from_cpu(method, value);
+    case method::k_hle_subchannel:
         if (method == method::k_hle_flip) queue_flip(value);
         if (method == method::k_hle_wait_flip && queued_flip_) waiting_ = Waiting::flip;
         return;
+    default: return fail(std::format("methods on subchannel {} are not supported yet", subchannel));
     }
-    execute_3d(method, value);
+}
+
+// An image from the CPU: SIZE_IN starts one, and each COLOR word is its next pixel, written to
+// the 2D surface at POINT if it falls inside SIZE_OUT. libgcm sends inline transfers this way,
+// such as fragment program constants (rsxSetFragmentProgramParameter).
+void Rsx::image_from_cpu(u32 method, u32 value) {
+    const auto reg5 = [&](u32 m) { return reg(m, method::k_subchannel_image_from_cpu); };
+    if (method == method::k_image_size_in) {
+        image_position_ = 0;
+        return;
+    }
+    if (method < method::k_image_color || method >= method::k_image_color + 0x700) return;
+
+    const u32 format = reg(method::k_surfaces_2d_format, method::k_subchannel_surfaces_2d);
+    if (format != method::k_surface_2d_y32) {
+        return fail(std::format("2D surface format {:#x} is not supported yet", format));
+    }
+    const u32 in_width = reg5(method::k_image_size_in) & 0xffff;
+    const u32 position = image_position_++;
+    if (in_width == 0) return;
+    const u32 x = position % in_width;
+    const u32 y = position / in_width;
+    if (x >= (reg5(method::k_image_size_out) & 0xffff) ||
+        y >= reg5(method::k_image_size_out) >> 16) {
+        return; // padding past the image
+    }
+    const auto surface = [&](u32 m) { return reg(m, method::k_subchannel_surfaces_2d); };
+    const u32 pitch = surface(method::k_surfaces_2d_pitch) >> 16;
+    const u32 offset = surface(method::k_surfaces_2d_destination_offset) +
+                       ((reg5(method::k_image_point) >> 16) + y) * pitch +
+                       ((reg5(method::k_image_point) & 0xffff) + x) * 4;
+    const auto address = resolve(surface(method::k_surfaces_2d_destination_context), offset);
+    if (!address)
+        return fail(std::format("an image from the CPU goes to unmapped offset {:#x}", offset));
+    memory_.write<u32>(*address, value);
 }
 
 void Rsx::execute_3d(u32 method, u32 value) {
@@ -260,7 +299,12 @@ void Rsx::execute_3d(u32 method, u32 value) {
     }
     case method::k_draw_index_array: read_indices(value & 0xff'ffff, (value >> 24) + 1); break;
     case method::k_clear_surface: clear_surface(value); break;
+    // The back end takes its value like an A8R8G8B8 color, with red and blue swapped:
+    // PSL1GHT's libgcm sends a label value of 1 as 0x00010000, and its programs wait for 1.
     case method::k_back_end_write_semaphore_release:
+        memory_.write<u32>(k_labels + reg(method::k_semaphore_offset_3d),
+                           (value & 0xff00'ff00) | (value >> 16 & 0xff) | (value & 0xff) << 16);
+        break;
     case method::k_texture_read_semaphore_release:
         memory_.write<u32>(k_labels + reg(method::k_semaphore_offset_3d), value);
         break;
@@ -380,6 +424,9 @@ void Rsx::end_primitive() {
     case method::k_triangles: request.primitive = Primitive::triangles; break;
     case method::k_triangle_strip: request.primitive = Primitive::triangle_strip; break;
     case method::k_triangle_fan: request.primitive = Primitive::triangle_fan; break;
+    case method::k_quads: request.primitive = Primitive::quads; break;
+    case method::k_quad_strip: request.primitive = Primitive::quad_strip; break;
+    case method::k_polygon: request.primitive = Primitive::polygon; break;
     default: return fail(std::format("primitive type {} is not supported yet", type));
     }
     request.vertices = std::move(draw_vertices_);
@@ -412,6 +459,11 @@ void Rsx::end_primitive() {
     if (!program_address) return fail("the fragment program is at an unmapped offset");
     auto fragment_program = fragment::decode_program(memory_, *program_address);
     if (!fragment_program) return fail("the fragment program has no end");
+    // The control word's bits: 0x40 for a full-precision result (R0, not H0), 0xe when the
+    // program writes depth. cgcomp, compilerfp.cpp, sets them so.
+    const u32 control = reg(method::k_shader_control);
+    if (control & 0xe) return fail("fragment programs that write depth are not supported yet");
+    fragment_program->half_output = (control & 0x40) == 0;
     request.fragment_program = std::move(*fragment_program);
 
     for (u32 i = 0; i < 4; ++i) {
@@ -428,7 +480,7 @@ void Rsx::end_primitive() {
         !set_culling(request)) {
         return;
     }
-    for (const fragment::Instruction& instruction : request.fragment_program) {
+    for (const fragment::Instruction& instruction : request.fragment_program.instructions) {
         if (!fragment::is_texture_lookup(instruction)) continue;
         const u32 unit = instruction.texture_unit;
         if (request.textures[unit]) continue;
@@ -560,10 +612,12 @@ std::optional<Texture> Rsx::texture(u32 unit) {
     // The format byte: GCM_TEXTURE_FORMAT_* in bits 0-4, then LIN and UNRM.
     const u32 format = field(method::k_texture_format, 8, 5);
     switch (format) {
+    case 1:
     case 2:
     case 3:
     case 4:
     case 5:
+    case 11:
     case 29:
     case 30: texture.format = static_cast<TextureFormat>(format); break;
     default: return unsupported(std::format("format {}", format));

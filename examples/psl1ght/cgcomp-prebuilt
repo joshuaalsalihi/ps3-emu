@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for cgcomp when PSL1GHT's own makefiles build a sample: copies the shader the
+# ps3emu-cgcomp image already compiled from Cg (the toolchain image can't). Usage, as cgcomp's:
+# cgcomp-prebuilt -v|-f <input> <output>
+cp "$(dirname "$0")/shaders/$(basename "$3")" "$3"

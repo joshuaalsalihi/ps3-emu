@@ -4,6 +4,8 @@
 # (one line per frame, with its SHA-1, as `ps3emu run --frames` writes them).
 # With -D SPLIT=<n>, the run stops after n instructions and saves its state, and a second
 # process resumes it; together they must print and display the same.
+# With -D MAX_FRAMES=<n>, the run ends once n frames have been displayed, for programs that
+# never exit.
 
 # Output files are named per test, since tests of the same program may run in parallel.
 set(log_base ${PROGRAM})
@@ -13,6 +15,10 @@ endif()
 
 set(frame_options "")
 set(resume_frame_options "")
+set(limit_options "")
+if(DEFINED MAX_FRAMES)
+    set(limit_options --max-frames ${MAX_FRAMES})
+endif()
 if(DEFINED FRAMES AND EXISTS ${FRAMES})
     set(frame_log ${log_base}.frames)
     set(frame_options --frames ${frame_log})
@@ -23,16 +29,16 @@ if(DEFINED SPLIT)
     set(state_file ${log_base}.state)
     execute_process(
         COMMAND ${EMULATOR} run --max-instructions ${SPLIT} --save-state ${state_file}
-            ${frame_options} ${PROGRAM}
+            ${limit_options} ${frame_options} ${PROGRAM}
         OUTPUT_VARIABLE output
         ERROR_VARIABLE errors
         RESULT_VARIABLE exit_status)
     # A program shorter than SPLIT has already exited; resuming it must change nothing.
-    if(NOT exit_status EQUAL 0 AND NOT errors MATCHES "^stopped: reached the limit")
+    if(NOT exit_status EQUAL 0 AND NOT errors MATCHES "stopped: reached the limit")
         message(FATAL_ERROR "first part exited with ${exit_status}\n${errors}")
     endif()
     execute_process(
-        COMMAND ${EMULATOR} resume ${resume_frame_options} ${state_file}
+        COMMAND ${EMULATOR} resume ${limit_options} ${resume_frame_options} ${state_file}
         OUTPUT_VARIABLE resumed_output
         ERROR_VARIABLE errors
         RESULT_VARIABLE exit_status)
@@ -43,7 +49,7 @@ if(DEFINED SPLIT)
     endif()
 else()
     execute_process(
-        COMMAND ${EMULATOR} run ${frame_options} ${PROGRAM}
+        COMMAND ${EMULATOR} run ${limit_options} ${frame_options} ${PROGRAM}
         OUTPUT_VARIABLE output
         ERROR_VARIABLE errors
         RESULT_VARIABLE exit_status)

@@ -88,6 +88,60 @@ function(add_psl1ght_program name)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/../run_example.cmake)
 endfunction()
 
+# add_psl1ght_sample(<name> <directory>) builds one of PSL1GHT's own samples, unmodified, from the
+# PSL1GHT sources in the ps3emu-cgcomp image: its Cg shaders are compiled there, the rest by its
+# own makefile in the toolchain image. It is tested against <name>.expected and its first
+# <frames> frames against <name>.frames. Skipped if that image isn't available.
+if(PS3EMU_DOCKER)
+    execute_process(
+        COMMAND ${PS3EMU_DOCKER} image inspect ps3emu-cgcomp
+        RESULT_VARIABLE cgcomp_missing OUTPUT_QUIET ERROR_QUIET)
+endif()
+if(cgcomp_missing)
+    message(STATUS "PSL1GHT samples: skipped (run tools/build-psl1ght-image.sh to enable)")
+endif()
+
+function(add_psl1ght_sample name directory frames)
+    if(cgcomp_missing)
+        return()
+    endif()
+    set(samples ${CMAKE_CURRENT_BINARY_DIR}/samples)
+    set(elf ${samples}/${directory}/build/${name}.elf)
+    # Each sample may use the others' shared code (rsxtest uses debugfont_renderer), so
+    # extract-samples.sh copies the whole samples/graphics directory and compiles its shaders.
+    add_custom_command(
+        OUTPUT ${elf}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${samples}
+        COMMAND ${PS3EMU_DOCKER} run --rm --platform linux/amd64 -v ${samples}:/out
+                -v ${CMAKE_CURRENT_SOURCE_DIR}:/source:ro ps3emu-cgcomp /source/extract-samples.sh
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/cgcomp-prebuilt ${samples}
+        COMMAND ${PS3EMU_DOCKER} run --rm -v ${samples}:/samples ps3emu-psl1ght
+                make -C /samples/${directory} CGCOMP=/samples/cgcomp-prebuilt
+        COMMAND ${CMAKE_COMMAND} -D FILE=${elf} -P ${CMAKE_CURRENT_SOURCE_DIR}/require_file.cmake
+        DEPENDS cgcomp-prebuilt extract-samples.sh
+        COMMENT "Building PSL1GHT's sample ${directory} (in Docker)"
+        VERBATIM)
+    add_custom_target(psl1ght_sample_${name} ALL DEPENDS ${elf})
+
+    foreach(split "" 1000000)
+        set(test example.psl1ght.${name})
+        set(split_option "")
+        if(split)
+            set(test ${test}.resume)
+            set(split_option -D SPLIT=${split})
+        endif()
+        add_test(NAME ${test}
+            COMMAND ${CMAKE_COMMAND}
+                -D EMULATOR=$<TARGET_FILE:ps3emu>
+                -D PROGRAM=${elf}
+                -D EXPECTED=${CMAKE_CURRENT_SOURCE_DIR}/${name}.expected
+                -D FRAMES=${CMAKE_CURRENT_SOURCE_DIR}/${name}.frames
+                -D MAX_FRAMES=${frames}
+                ${split_option}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/../run_example.cmake)
+    endforeach()
+endfunction()
+
 add_psl1ght_program(hello)
 add_psl1ght_program(threads)
 add_psl1ght_program(floats)
@@ -97,3 +151,4 @@ add_psl1ght_program(rsx_clear)
 add_psl1ght_program(rsx_triangle)
 add_psl1ght_program(rsx_cube)
 add_psl1ght_program(rsx_scene)
+add_psl1ght_sample(rsxtest graphics/rsxtest 2)
